@@ -34,7 +34,6 @@ protected:
 		initVulkanPhysicalDevice();
 		initVulkanSurface();
 		initVulkanLogicalDevice();
-		initVulkanPresentationQueue();
 	}
 
 	VkInstance vkinstance = {};
