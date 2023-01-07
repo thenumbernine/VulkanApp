@@ -1,0 +1,24 @@
+distName='test'
+distType='app'
+depends:append{
+	'../SDLApp',
+	'../Tensor',
+	'../Common',
+}
+libs:insert'vulkan'
+
+local function exec(cmd)
+	print('>> '..cmd)
+	assert(os.execute(cmd))
+end
+function postBuildDist(resPath)
+	print"compiling shaders..."
+	local function compileShader(from, to)
+		from = resPath..'/'..from
+		to = resPath..'/'..to
+		-- hmm, external tool ...
+		exec('glslc "'..from..'" -o "'..to..'"')
+	end
+	compileShader('shader.vert', 'vert.spv')
+	compileShader('shader.frag', 'frag.spv')
+end
