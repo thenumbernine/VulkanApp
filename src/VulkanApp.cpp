@@ -5,10 +5,6 @@
 #include <iostream>	//debugging only
 #include <set>
 
-//https://www.gamedev.net/forums/topic/699117-vulkan-with-sdl2-getting-started/
-//https://vulkan-tutorial.com/Drawing_a_triangle/Setup/Instance
-//https://docs.tizen.org/application/native/guides/graphics/vulkan/
-
 struct Test : public ::SDLApp::SDLApp {
 	using Super = ::SDLApp::SDLApp;
 
