@@ -9,5 +9,8 @@ Using this:
 - https://www.gamedev.net/forums/topic/699117-vulkan-with-sdl2-getting-started/
 - https://vulkan-tutorial.com/Drawing_a_triangle/Setup/Instance
 - https://docs.tizen.org/application/native/guides/graphics/vulkan/
+- https://stackoverflow.com/questions/52388836/how-to-compile-opencl-kernels-to-spir-v-using-clang
 
-
+maybe?
+- `clang -cc1 -emit-spirv -triple=spir-unknown-unknown -cl-std=c++ -I include kernel.cl -o kernel.spv #For OpenCL C++`
+- `clang -cc1 -emit-spirv -triple=spir-unknown-unknown -cl-std=CL2.0 -include opencl.h kernel.cl -o kernel.spv #For OpenCL C`

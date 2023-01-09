@@ -11,14 +11,25 @@ local function exec(cmd)
 	print('>> '..cmd)
 	assert(os.execute(cmd))
 end
+-- TODO this in 'dist' or this in base folder?
+-- resPath is in dist
+-- in fact for linux it matches dist
+-- wait I thought res/ was copied into dist resource path by default?
 function postBuildDist(resPath)
 	print"compiling shaders..."
+	-- TODO lmake provide a dest/sources rule function like gnu make has
 	local function compileShader(from, to)
-		from = resPath..'/'..from
+		from = 'res/'..from
 		to = resPath..'/'..to
 		-- hmm, external tool ...
-		exec('glslc "'..from..'" -o "'..to..'"')
+		exec('clspv "'..from..'" -o "'..to..'"')
 	end
-	compileShader('shader.vert', 'vert.spv')
-	compileShader('shader.frag', 'frag.spv')
+	--[[ if I had glslc
+	compileShader('shader.vert', 'shader-vert.spv')
+	compileShader('shader.frag', 'shader-frag.spv')
+	--]]
+	-- [[ but I have clspv
+	compileShader('shader-vert.cl', 'shader-vert.spv')
+	compileShader('shader-frag.cl', 'shader-frag.spv')
+	--]]
 end
