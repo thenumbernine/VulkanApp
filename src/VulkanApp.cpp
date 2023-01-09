@@ -365,16 +365,18 @@ struct VulkanCommon {
 	std::unique_ptr<VulkanDebugMessenger> debug;	// optional
 	std::unique_ptr<VulkanSurface> surface;
 	
-	VkRenderPass renderPass;
-	VkPipelineLayout pipelineLayout;
-	VkPipeline graphicsPipeline;
+	VkRenderPass renderPass = {};
+	VkPipelineLayout pipelineLayout = {};
+	VkPipeline graphicsPipeline = {};
     
-	VkCommandPool commandPool;
+	VkCommandPool commandPool = {};
     std::vector<VkCommandBuffer> commandBuffers;
 	std::vector<VkSemaphore> imageAvailableSemaphores;
     std::vector<VkSemaphore> renderFinishedSemaphores;
     std::vector<VkFence> inFlightFences;
     uint32_t currentFrame = 0;
+    
+	bool framebufferResized = false;
 
 	// used by 
 	//	VulkanPhysicalDevice::checkDeviceExtensionSupport
@@ -382,6 +384,9 @@ struct VulkanCommon {
 	std::vector<char const *> const deviceExtensions = {
 		VK_KHR_SWAPCHAIN_EXTENSION_NAME
 	};
+
+	//ok now we're at the point where we are recreating objects dependent on physicalDevice so
+	std::unique_ptr<VulkanPhysicalDevice> physicalDevice;
 
 	VulkanCommon(::SDLApp::SDLApp const * const app_) 
 	: app(app_) {
@@ -401,10 +406,10 @@ struct VulkanCommon {
 		
 		// used in other inits  ... initLogicalDevice and initSwapChain
 		// so we don't need to store this as a member, but only a scoped var for the duration of the ctor
-		auto physicalDevice = std::make_unique<VulkanPhysicalDevice>((*instance)(), (*surface)(), deviceExtensions);
+		physicalDevice = std::make_unique<VulkanPhysicalDevice>((*instance)(), (*surface)(), deviceExtensions);
 		initLogicalDevice(physicalDevice.get());
 		initSwapChain(physicalDevice.get());
-		initImageView();
+		initImageViews();
 		initRenderPass();
 		initGraphicsPipeline();
 		initFramebuffers();
@@ -416,7 +421,13 @@ struct VulkanCommon {
 	static constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
 	~VulkanCommon() {
-        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+		cleanupSwapChain();
+		
+		if (graphicsPipeline) vkDestroyPipeline(device, graphicsPipeline, nullptr);
+		if (pipelineLayout) vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
+		if (renderPass) vkDestroyRenderPass(device, renderPass, nullptr);
+
+		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
 			vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
 			vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
 			vkDestroyFence(device, inFlightFences[i], nullptr);
@@ -424,22 +435,47 @@ struct VulkanCommon {
 
 		vkDestroyCommandPool(device, commandPool, nullptr);
 
-		for (auto framebuffer : swapChainFramebuffers) {
-            vkDestroyFramebuffer(device, framebuffer, nullptr);
-        }
-
-		vkDestroyPipeline(device, graphicsPipeline, nullptr);
-		vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
-		vkDestroyRenderPass(device, renderPass, nullptr);
-		for (auto imageView : swapChainImageViews) {
-			vkDestroyImageView(device, imageView, nullptr);
-		}
-		if (swapChain) vkDestroySwapchainKHR(device, swapChain, nullptr);
 		if (device) vkDestroyDevice(device, nullptr);
 		surface = nullptr;
 		debug = nullptr;
 		instance = nullptr;
 	}
+
+	void cleanupSwapChain() {
+        for (auto framebuffer : swapChainFramebuffers) {
+            vkDestroyFramebuffer(device, framebuffer, nullptr);
+        }
+        for (auto imageView : swapChainImageViews) {
+            vkDestroyImageView(device, imageView, nullptr);
+        }
+        if (swapChain) vkDestroySwapchainKHR(device, swapChain, nullptr);
+	}
+
+    void recreateSwapChain() {
+		
+#if 0 //hmm why are there multiple events?        
+        int width = app->getScreenSize().x;
+		int height = app->getScreenSize().y;
+		glfwGetFramebufferSize(window, &width, &height);
+        while (width == 0 || height == 0) {
+            glfwGetFramebufferSize(window, &width, &height);
+            glfwWaitEvents();
+        }
+#else
+		if (!app->getScreenSize().x ||
+			!app->getScreenSize().y)
+		{
+			throw Common::Exception() << "here";
+		}
+#endif
+        vkDeviceWaitIdle(device);
+
+        cleanupSwapChain();
+
+        initSwapChain(physicalDevice.get());
+        initImageViews();
+        initFramebuffers();
+    }
 
 	// validationLayers matches in checkValidationLayerSupport and initLogicalDevice
 	std::vector<char const *> const validationLayers = {
@@ -564,8 +600,6 @@ struct VulkanCommon {
 		createInfo.presentMode = presentMode;
 		createInfo.clipped = VK_TRUE;
 
-		createInfo.oldSwapchain = VK_NULL_HANDLE;
-
 		VULKAN_SAFE(vkCreateSwapchainKHR, device, &createInfo, nullptr, &swapChain);
 
 		vkGetSwapchainImagesKHR(device, swapChain, &imageCount, nullptr);
@@ -612,7 +646,7 @@ struct VulkanCommon {
 		}
 	}
 	
-	void initImageView() {
+	void initImageViews() {
 		swapChainImageViews.resize(swapChainImages.size());
 
 		for (size_t i = 0; i < swapChainImages.size(); i++) {
@@ -914,10 +948,18 @@ struct VulkanCommon {
 
     void drawFrame() {
         vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
-        vkResetFences(device, 1, &inFlightFences[currentFrame]);
 
         uint32_t imageIndex;
-        vkAcquireNextImageKHR(device, swapChain, UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
+        VkResult result = vkAcquireNextImageKHR(device, swapChain, UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
+
+        if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+            recreateSwapChain();
+            return;
+        } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
+            throw std::runtime_error("failed to acquire swap chain image!");
+        }
+
+        vkResetFences(device, 1, &inFlightFences[currentFrame]);
 
         vkResetCommandBuffer(commandBuffers[currentFrame], /*VkCommandBufferResetFlagBits*/ 0);
         recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
@@ -954,7 +996,14 @@ struct VulkanCommon {
 
         presentInfo.pImageIndices = &imageIndex;
 
-        vkQueuePresentKHR(presentQueue, &presentInfo);
+        result = vkQueuePresentKHR(presentQueue, &presentInfo);
+
+        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized) {
+            framebufferResized = false;
+            recreateSwapChain();
+        } else if (result != VK_SUCCESS) {
+            throw std::runtime_error("failed to present swap chain image!");
+        }
 
         currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
     }
@@ -972,6 +1021,9 @@ protected:
 	
 	virtual void initWindow() {
 		Super::initWindow();
+		
+		// TODO make the window not resizeable
+
 		vk = std::make_unique<VulkanCommon>(this);
 	}
 
@@ -980,12 +1032,10 @@ protected:
 	}
 	
 	virtual Uint32 getSDLCreateWindowFlags() {
-		return Super::getSDLCreateWindowFlags() | SDL_WINDOW_VULKAN;
-	}
-
-	virtual void onUpdate() {
-		Super::onUpdate();
-		vk->drawFrame();
+		auto flags = Super::getSDLCreateWindowFlags();
+		flags |= SDL_WINDOW_VULKAN;
+		flags &= ~SDL_WINDOW_RESIZABLE;
+		return flags;
 	}
 
 	virtual void loop() {
@@ -993,6 +1043,15 @@ protected:
 		//why here instead of shutdown?
 
 		vk->loopDone();
+	}
+	
+	virtual void onUpdate() {
+		Super::onUpdate();
+		vk->drawFrame();
+	}
+
+	virtual void onResize() {
+        vk->framebufferResized = true;
 	}
 };
 
