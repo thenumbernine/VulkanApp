@@ -17,10 +17,10 @@ end
 -- wait I thought res/ was copied into dist resource path by default?
 function postBuildDist(resPath)
 	print"compiling shaders..."
-	-- TODO lmake provide a dest/sources rule function like gnu make has
 	local function compileShader(from, to)
 		from = 'res/'..from
 		to = resPath..'/'..to
+		if not needsUpdate(to, {from}) then return end
 		-- hmm, external tool ...
 		exec('clspv "'..from..'" -o "'..to..'"')
 	end

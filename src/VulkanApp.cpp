@@ -127,7 +127,6 @@ public:
 	VulkanDebugMessenger(
 		VkInstance instance_
 	) : instance(instance_) {
-		// get ext func ptrs
 
 		Common::TupleForEach(exts, [this](auto x, size_t i) constexpr -> bool {
 			auto name = std::get<0>(x);
@@ -152,7 +151,6 @@ public:
 protected:
 	static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity, VkDebugUtilsMessageTypeFlagsEXT messageType, const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData) {
 		std::cerr << "validation layer: " << pCallbackData->pMessage << std::endl;
-
 		return VK_FALSE;
 	}
 };
