@@ -944,9 +944,7 @@ struct VulkanCommon {
             framebufferInfo.height = swapChain->swapChainExtent.height;
             framebufferInfo.layers = 1;
 
-            if (vkCreateFramebuffer((*device)(), &framebufferInfo, nullptr, &swapChain->swapChainFramebuffers[i]) != VK_SUCCESS) {
-                throw std::runtime_error("failed to create framebuffer!");
-            }
+            VULKAN_SAFE(vkCreateFramebuffer, (*device)(), &framebufferInfo, nullptr, &swapChain->swapChainFramebuffers[i]);
         }
     }
 
@@ -958,9 +956,7 @@ struct VulkanCommon {
         poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
         poolInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily.value();
 
-        if (vkCreateCommandPool((*device)(), &poolInfo, nullptr, &commandPool) != VK_SUCCESS) {
-            throw std::runtime_error("failed to create command pool!");
-        }
+        VULKAN_SAFE(vkCreateCommandPool, (*device)(), &poolInfo, nullptr, &commandPool);
     }
 
     void initVertexBuffer() {
@@ -970,9 +966,7 @@ struct VulkanCommon {
         bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
         bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-        if (vkCreateBuffer((*device)(), &bufferInfo, nullptr, &vertexBuffer) != VK_SUCCESS) {
-            throw std::runtime_error("failed to create vertex buffer!");
-        }
+        VULKAN_SAFE(vkCreateBuffer, (*device)(), &bufferInfo, nullptr, &vertexBuffer);
 
         VkMemoryRequirements memRequirements;
         vkGetBufferMemoryRequirements((*device)(), vertexBuffer, &memRequirements);
@@ -982,9 +976,7 @@ struct VulkanCommon {
         allocInfo.allocationSize = memRequirements.size;
         allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
-        if (vkAllocateMemory((*device)(), &allocInfo, nullptr, &vertexBufferMemory) != VK_SUCCESS) {
-            throw std::runtime_error("failed to allocate vertex buffer memory!");
-        }
+        VULKAN_SAFE(vkAllocateMemory, (*device)(), &allocInfo, nullptr, &vertexBufferMemory);
 
         vkBindBufferMemory((*device)(), vertexBuffer, vertexBufferMemory, 0);
 
@@ -1004,7 +996,7 @@ struct VulkanCommon {
             }
         }
 
-        throw std::runtime_error("failed to find suitable memory type!");
+        throw Common::Exception() << ("failed to find suitable memory type!");
     }
 
 
@@ -1015,19 +1007,14 @@ struct VulkanCommon {
         allocInfo.commandPool = commandPool;
         allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         allocInfo.commandBufferCount = (uint32_t) commandBuffers.size();
-
-        if (vkAllocateCommandBuffers((*device)(), &allocInfo, commandBuffers.data()) != VK_SUCCESS) {
-            throw std::runtime_error("failed to allocate command buffers!");
-        }
+        VULKAN_SAFE(vkAllocateCommandBuffers, (*device)(), &allocInfo, commandBuffers.data());
     }
 
     void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex) {
         VkCommandBufferBeginInfo beginInfo = {};
         beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 
-        if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) {
-            throw std::runtime_error("failed to begin recording command buffer!");
-        }
+        VULKAN_SAFE(vkBeginCommandBuffer, commandBuffer, &beginInfo);
 
         VkRenderPassBeginInfo renderPassInfo = {};
         renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -1066,9 +1053,7 @@ struct VulkanCommon {
 
         vkCmdEndRenderPass(commandBuffer);
 
-        if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
-            throw std::runtime_error("failed to record command buffer!");
-        }
+        VULKAN_SAFE(vkEndCommandBuffer, commandBuffer);
     }
 
     void initSyncObjects() {
@@ -1084,11 +1069,9 @@ struct VulkanCommon {
         fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
         for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-			if (vkCreateSemaphore((*device)(), &semaphoreInfo, nullptr, &imageAvailableSemaphores[i]) != VK_SUCCESS ||
-				vkCreateSemaphore((*device)(), &semaphoreInfo, nullptr, &renderFinishedSemaphores[i]) != VK_SUCCESS ||
-				vkCreateFence((*device)(), &fenceInfo, nullptr, &inFlightFences[i]) != VK_SUCCESS) {
-				throw std::runtime_error("failed to create synchronization objects for a frame!");
-			}
+			VULKAN_SAFE(vkCreateSemaphore, (*device)(), &semaphoreInfo, nullptr, &imageAvailableSemaphores[i]);
+			VULKAN_SAFE(vkCreateSemaphore, (*device)(), &semaphoreInfo, nullptr, &renderFinishedSemaphores[i]);
+			VULKAN_SAFE(vkCreateFence, (*device)(), &fenceInfo, nullptr, &inFlightFences[i]);
 		}
     }
 
@@ -1097,12 +1080,11 @@ struct VulkanCommon {
 
         uint32_t imageIndex;
         VkResult result = vkAcquireNextImageKHR((*device)(), (*swapChain)(), UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
-
         if (result == VK_ERROR_OUT_OF_DATE_KHR) {
             recreateSwapChain();
             return;
         } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
-            throw std::runtime_error("failed to acquire swap chain image!");
+            throw Common::Exception() << "vkAcquireNextImageKHR failed: " << result;
         }
 
         vkResetFences((*device)(), 1, &inFlightFences[currentFrame]);
@@ -1126,9 +1108,7 @@ struct VulkanCommon {
         submitInfo.signalSemaphoreCount = 1;
         submitInfo.pSignalSemaphores = signalSemaphores;
 
-        if (vkQueueSubmit(device->graphicsQueue, 1, &submitInfo, inFlightFences[currentFrame]) != VK_SUCCESS) {
-            throw std::runtime_error("failed to submit draw command buffer!");
-        }
+        VULKAN_SAFE(vkQueueSubmit, device->graphicsQueue, 1, &submitInfo, inFlightFences[currentFrame]);
 
         VkPresentInfoKHR presentInfo = {};
         presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
@@ -1143,12 +1123,11 @@ struct VulkanCommon {
         presentInfo.pImageIndices = &imageIndex;
 
         result = vkQueuePresentKHR(device->presentQueue, &presentInfo);
-
         if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized) {
             framebufferResized = false;
             recreateSwapChain();
         } else if (result != VK_SUCCESS) {
-            throw std::runtime_error("failed to present swap chain image!");
+            throw Common::Exception() << "vkQueuePresentKHR failed: " << result;
         }
 
         currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
