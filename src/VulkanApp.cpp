@@ -8,17 +8,116 @@
 
 // why do I think there are already similar classes in vulkan.hpp?
 
+struct VulkanInstance {
+protected:	
+	VkInstance instance = {};
+public:	
+	decltype(instance) operator()() const { return instance; }
+
+	~VulkanInstance() {
+		if (instance) vkDestroyInstance(instance, nullptr);
+	}
+	
+	VulkanInstance(::SDLApp::SDLApp const * const app, bool enableValidationLayers) {
+		// vkCreateInstance needs appInfo
+		
+		VkApplicationInfo appInfo = {};
+		appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+		auto title = app->getTitle();
+		appInfo.pApplicationName = title.c_str();
+		appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
+		appInfo.pEngineName = "No Engine";
+		appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
+		appInfo.apiVersion = VK_API_VERSION_1_0;
+
+		// debug output
+
+		{
+			std::vector<VkLayerProperties> availableLayers;
+			uint32_t layerCount = {};
+			vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
+			availableLayers.resize(layerCount);
+			vkEnumerateInstanceLayerProperties(&layerCount, availableLayers.data());
+			std::cout << "vulkan layers:" << std::endl;
+			for (auto const & layer : availableLayers) {
+				std::cout << "\t" << layer.layerName << std::endl;
+			}
+		}
+		
+		// vkCreateInstance needs layerNames
+
+		std::vector<const char *> layerNames;
+		if (enableValidationLayers) {
+			//insert which of those into our layerName for creating something or something
+			//layerNames.push_back("VK_LAYER_LUNARG_standard_validation");	//nope
+			layerNames.push_back("VK_LAYER_KHRONOS_validation");	//nope
+		}
+		
+		// vkCreateInstance needs extensions
+
+		VkInstanceCreateInfo createInfo = {};
+		createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+		createInfo.pApplicationInfo = &appInfo;
+		createInfo.enabledLayerCount = layerNames.size();
+		createInfo.ppEnabledLayerNames = layerNames.data();
+		
+		auto extensions = getRequiredExtensions(app, enableValidationLayers);
+		createInfo.enabledExtensionCount = extensions.size();
+		createInfo.ppEnabledExtensionNames = extensions.data();
+		{
+			VkResult res = vkCreateInstance(&createInfo, nullptr, &instance);
+			if (res != VK_SUCCESS) {
+				throw Common::Exception() << "vkCreateInstance failed: " << res;
+			}
+		}
+	}
+protected:
+	std::vector<char const *> getRequiredExtensions(::SDLApp::SDLApp const * const app, bool enableValidationLayers) {
+		uint32_t extensionCount = {};
+		if (SDL_Vulkan_GetInstanceExtensions(app->getWindow(), &extensionCount, nullptr) == SDL_FALSE) {
+			throw Common::Exception() << "SDL_Vulkan_GetInstanceExtensions failed: " << SDL_GetError();
+		}
+		
+		std::vector<const char *> extensions(extensionCount);
+		if (SDL_Vulkan_GetInstanceExtensions(app->getWindow(), &extensionCount, extensions.data()) == SDL_FALSE) {
+			throw Common::Exception() << "SDL_Vulkan_GetInstanceExtensions failed: " << SDL_GetError();
+		}
+
+		//debugging:
+		std::cout << "vulkan extensions:" << std::endl;
+		for (auto const & ext : extensions) {
+			std::cout << "\t" << ext << std::endl;
+		}
+
+		if (enableValidationLayers) {
+			extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+		}
+
+		return extensions;
+	}
+};
+
 struct VulkanDebugMessenger {
+protected:	
 	VkDebugUtilsMessengerEXT debugMessenger = {};
+	VkInstance instance;	//from VulkanCommon, needs to be held for dtor to work
 	
 	// TODO reflection, pair, name, and constexpr lambda iterator across these to load them all at once
 	// then put it in another class so other classes can access it and not just this class.
 	PFN_vkCreateDebugUtilsMessengerEXT vkCreateDebugUtilsMessengerEXT = {};
 	PFN_vkDestroyDebugUtilsMessengerEXT vkDestroyDebugUtilsMessengerEXT = {};
-	
-	//from VulkanCommon
-	VkInstance instance;
-	VulkanDebugMessenger(VkInstance instance_) : instance(instance_) {
+
+public:
+	~VulkanDebugMessenger() {
+		// call destroy function
+		if (vkDestroyDebugUtilsMessengerEXT && debugMessenger) {
+			vkDestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
+		}
+	}
+
+	VulkanDebugMessenger(
+		VkInstance instance_
+	) : instance(instance_) {
 		// get ext func ptrs
 
 		vkCreateDebugUtilsMessengerEXT = (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT");
@@ -43,13 +142,7 @@ struct VulkanDebugMessenger {
 		}
 	}
 
-	~VulkanDebugMessenger() {
-		// call destroy function
-		if (vkDestroyDebugUtilsMessengerEXT && debugMessenger) {
-			vkDestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
-		}
-	}
-
+protected:
 	static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity, VkDebugUtilsMessageTypeFlagsEXT messageType, const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData) {
 		std::cerr << "validation layer: " << pCallbackData->pMessage << std::endl;
 
@@ -57,9 +150,212 @@ struct VulkanDebugMessenger {
 	}
 };
 
+struct VulkanSurface {
+protected:	
+	VkSurfaceKHR surface;
+	VkInstance instance;	//from VulkanCommon, needs to be held for dtor to work
+public:
+	decltype(surface) operator()() const { return surface; }
+	
+	~VulkanSurface() {
+		if (surface) vkDestroySurfaceKHR(instance, surface, nullptr);
+	}
+
+	VulkanSurface(
+		::SDLApp::SDLApp const * const app,
+		VkInstance instance_
+	) : instance(instance_) {
+		// https://vulkan-tutorial.com/Drawing_a_triangle/Presentation/Window_surface
+		if (!SDL_Vulkan_CreateSurface(app->getWindow(), instance, &surface)) {
+			 throw Common::Exception() << "vkCreateWaylandSurfaceKHR failed: " << SDL_GetError();
+		}
+	}
+};
+
+struct VulkanPhysicalDevice {
+protected:	
+	VkPhysicalDevice physicalDevice = {};
+public:
+	decltype(physicalDevice) operator()() const { return physicalDevice; }
+
+	~VulkanPhysicalDevice() {}
+	
+	VulkanPhysicalDevice(
+		VkInstance instance,
+		VkSurfaceKHR surface,								// needed by isDeviceSuitable -> findQueueFamilie
+		std::vector<char const *> const & deviceExtensions	// needed by isDeviceSuitable -> checkDeviceExtensionSupport
+	) {
+		uint32_t deviceCount = {};
+		vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr);
+		if (!deviceCount) {
+			throw Common::Exception() << "failed to find GPUs with Vulkan support!";
+		}
+		std::vector<VkPhysicalDevice> devices(deviceCount);
+		vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
+		
+		std::cout << "devices:" << std::endl;
+		for (auto const & device : devices) {
+			VkPhysicalDeviceProperties deviceProperties;
+			vkGetPhysicalDeviceProperties(device, &deviceProperties);
+			std::cout 
+				<< "\t"
+				<< deviceProperties.deviceName 
+				<< " type=" << deviceProperties.deviceType
+				<< std::endl;
+
+			if (isDeviceSuitable(device, surface, deviceExtensions)) {
+				physicalDevice = device;
+				break;
+			}
+		}
+
+		if (!physicalDevice) {
+			throw Common::Exception() << "failed to find a suitable GPU!";
+		}
+	}
+
+protected:
+	static bool isDeviceSuitable(
+		VkPhysicalDevice physicalDevice,
+		VkSurfaceKHR surface,								// needed by findQueueFamilies, querySwapChainSupport
+		std::vector<char const *> const & deviceExtensions	// needed by checkDeviceExtensionSupport
+	) {
+
+#if 0	// i'm not seeing queue families indices and the actual physicalDevice info query overlap
+		// or is querying individual devices properties not a thing anymore?
+		// do you just search for the queue family bit?  graphics? compute? whatever?
+
+		VkPhysicalDeviceProperties deviceProperties;
+		vkGetPhysicalDeviceProperties(physicalDevice, &deviceProperties);
+		VkPhysicalDeviceFeatures deviceFeatures;
+		vkGetPhysicalDeviceFeatures(physicalDevice, &deviceFeatures);
+		// TODO sort by score and pick the best
+		return deviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU
+			|| deviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU
+			|| deviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU
+		;
+			// && deviceFeatures.geometryShader;
+#endif
+
+		auto indices = findQueueFamilies(physicalDevice, surface);
+		
+		bool extensionsSupported = checkDeviceExtensionSupport(physicalDevice, deviceExtensions);
+
+		bool swapChainAdequate = false;
+		if (extensionsSupported) {
+			auto swapChainSupport = querySwapChainSupport(physicalDevice, surface);
+			swapChainAdequate = !swapChainSupport.formats.empty() && !swapChainSupport.presentModes.empty();
+		}
+
+		return indices.isComplete() 
+			&& extensionsSupported 
+			&& swapChainAdequate;
+	}
+
+	//used by isDeviceSuitable
+	static bool checkDeviceExtensionSupport(
+		VkPhysicalDevice physicalDevice,
+		std::vector<char const *> const & deviceExtensions
+	) {
+		uint32_t extensionCount;
+		vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &extensionCount, nullptr);
+
+		std::vector<VkExtensionProperties> availableExtensions(extensionCount);
+		vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &extensionCount, availableExtensions.data());
+
+		std::set<std::string> requiredExtensions(deviceExtensions.begin(), deviceExtensions.end());
+
+		for (const auto& extension : availableExtensions) {
+			requiredExtensions.erase(extension.extensionName);
+		}
+
+		return requiredExtensions.empty();
+	}
+
+public:
+
+	struct QueueFamilyIndices {
+		std::optional<uint32_t> graphicsFamily;
+		std::optional<uint32_t> presentFamily;
+	
+		bool isComplete() {
+			return graphicsFamily.has_value()
+				&& presentFamily.has_value();
+		}
+	};
+
+	// used by a few functions
+	// needs surface
+	static QueueFamilyIndices findQueueFamilies(
+		VkPhysicalDevice physicalDevice,
+		VkSurfaceKHR surface
+	) {
+		QueueFamilyIndices indices;
+
+		uint32_t queueFamilyCount = 0;
+		vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, nullptr);
+		std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
+		vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, queueFamilies.data());
+
+
+		for (uint32_t i = 0; i < queueFamilies.size(); ++i) {
+			auto const & f = queueFamilies[i];
+			if (f.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+				indices.graphicsFamily = i;
+			}
+	
+			VkBool32 presentSupport = false;
+			vkGetPhysicalDeviceSurfaceSupportKHR(physicalDevice, i, surface, &presentSupport);
+			if (presentSupport) {
+				indices.presentFamily = i;
+			}
+			
+			if (indices.isComplete()) return indices;
+		}
+
+		throw Common::Exception() << "couldn't find all indices";
+	}
+
+public:
+	struct SwapChainSupportDetails {
+		VkSurfaceCapabilitiesKHR capabilities;
+		std::vector<VkSurfaceFormatKHR> formats;
+		std::vector<VkPresentModeKHR> presentModes;
+	};
+
+	static SwapChainSupportDetails querySwapChainSupport(
+		VkPhysicalDevice physicalDevice,
+		VkSurfaceKHR surface
+	) {
+		SwapChainSupportDetails details;
+
+		vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, surface, &details.capabilities);
+
+		uint32_t formatCount;
+		vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, &formatCount, nullptr);
+
+		if (formatCount != 0) {
+			details.formats.resize(formatCount);
+			vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, &formatCount, details.formats.data());
+		}
+
+		uint32_t presentModeCount;
+		vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &presentModeCount, nullptr);
+
+		if (presentModeCount != 0) {
+			details.presentModes.resize(presentModeCount);
+			vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &presentModeCount, details.presentModes.data());
+		}
+
+		return details;
+	}
+	
+
+};
+
 // so I don't have to prefix all my fields and names
 struct VulkanCommon {
-	::SDLApp::SDLApp * app = {};
+	::SDLApp::SDLApp const * app = {};	// points back to the owner
 
 #if 0	// not working on my vulkan implementation
 	static constexpr bool const enableValidationLayers = true;
@@ -67,18 +363,41 @@ struct VulkanCommon {
 	static constexpr bool const enableValidationLayers = false;
 #endif
 
-	std::unique_ptr<VulkanDebugMessenger> debug;
+	std::unique_ptr<VulkanInstance> instance;
+	std::unique_ptr<VulkanDebugMessenger> debug;	// optional
+	std::unique_ptr<VulkanSurface> surface;
 
-	VulkanCommon(::SDLApp::SDLApp * app_) 
+	// used by 
+	//	VulkanPhysicalDevice::checkDeviceExtensionSupport
+	//	initLogicalDevice
+	std::vector<char const *> const deviceExtensions = {
+		VK_KHR_SWAPCHAIN_EXTENSION_NAME
+	};
+
+
+	VulkanCommon(::SDLApp::SDLApp const * const app_) 
 	: app(app_) {
-		initInstance();
-		if (enableValidationLayers) {
-			debug = std::make_unique<VulkanDebugMessenger>(instance);
+		// TODO half tempting to put this inside debug init instead of here
+		if (enableValidationLayers && !checkValidationLayerSupport()) {
+			throw Common::Exception() << "validation layers requested, but not available!";
 		}
-		initSurface();
-		initPhysicalDevice();
-		initLogicalDevice();
-		initSwapChain();
+
+		// hmm, maybe instance should be a shared_ptr and then passed to debug, surface, and physicalDevice ?
+		instance = std::make_unique<VulkanInstance>(app, enableValidationLayers);
+		
+		if (enableValidationLayers) {
+			debug = std::make_unique<VulkanDebugMessenger>((*instance)());
+		}
+		
+		surface = std::make_unique<VulkanSurface>(app, (*instance)());
+		
+		{
+			// used in other inits  ... initLogicalDevice and initSwapChain
+			// so we don't need to store this as a member, but only a scoped var for the duration of the ctor
+			auto physicalDevice = std::make_unique<VulkanPhysicalDevice>((*instance)(), (*surface)(), deviceExtensions);
+			initLogicalDevice(physicalDevice.get());
+			initSwapChain(physicalDevice.get());
+		}
 		initImageView();
 		initGraphicsPipeline();
 	}
@@ -89,93 +408,12 @@ struct VulkanCommon {
 		}
 		if (swapChain) vkDestroySwapchainKHR(device, swapChain, nullptr);
 		if (device) vkDestroyDevice(device, nullptr);
-		if (surface) vkDestroySurfaceKHR(instance, surface, nullptr);
+		surface = nullptr;
 		debug = nullptr;
-		if (instance) vkDestroyInstance(instance, nullptr);
+		instance = nullptr;
 	}
 
-	VkInstance instance = {};
-	
-	virtual void initInstance() {
-		if (enableValidationLayers && !checkValidationLayerSupport()) {
-			throw Common::Exception() << "validation layers requested, but not available!";
-		}
-	
-		// vkCreateInstance needs appInfo
-		
-		VkApplicationInfo appInfo = {};
-		appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-		appInfo.pApplicationName = "Hello Triangle";
-		appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
-		appInfo.pEngineName = "No Engine";
-		appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-		appInfo.apiVersion = VK_API_VERSION_1_0;
-
-		// vkCreateInstance needs layerNames
-		
-		std::vector<const char *> layerNames;
-		
-		{
-			std::vector<VkLayerProperties> availableLayers;
-			uint32_t layerCount = {};
-			vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
-			availableLayers.resize(layerCount);
-			vkEnumerateInstanceLayerProperties(&layerCount, availableLayers.data());
-			std::cout << "vulkan layers:" << std::endl;
-			for (auto const & layer : availableLayers) {
-				std::cout << "\t" << layer.layerName << std::endl;
-			}
-		}
-
-		if (enableValidationLayers) {
-			//insert which of those into our layerName for creating something or something
-			//layerNames.push_back("VK_LAYER_LUNARG_standard_validation");	//nope
-			layerNames.push_back("VK_LAYER_KHRONOS_validation");	//nope
-		}
-		
-		// vkCreateInstance needs extensions
-
-		VkInstanceCreateInfo createInfo = {};
-		createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-		createInfo.pApplicationInfo = &appInfo;
-		createInfo.enabledLayerCount = layerNames.size();
-		createInfo.ppEnabledLayerNames = layerNames.data();
-		
-		auto extensions = getRequiredExtensions();
-		createInfo.enabledExtensionCount = extensions.size();
-		createInfo.ppEnabledExtensionNames = extensions.data();
-		{
-			VkResult res = vkCreateInstance(&createInfo, nullptr, &instance);
-			if (res != VK_SUCCESS) {
-				throw Common::Exception() << "vkCreateInstance failed: " << res;
-			}
-		}
-	}
-
-	std::vector<char const *> getRequiredExtensions() {
-		uint32_t extensionCount = {};
-		if (SDL_Vulkan_GetInstanceExtensions(app->getWindow(), &extensionCount, nullptr) == SDL_FALSE) {
-			throw Common::Exception() << "SDL_Vulkan_GetInstanceExtensions failed: " << SDL_GetError();
-		}
-		
-		std::vector<const char *> extensions(extensionCount);
-		if (SDL_Vulkan_GetInstanceExtensions(app->getWindow(), &extensionCount, extensions.data()) == SDL_FALSE) {
-			throw Common::Exception() << "SDL_Vulkan_GetInstanceExtensions failed: " << SDL_GetError();
-		}
-
-		std::cout << "vulkan extensions:" << std::endl;
-		for (auto const & ext : extensions) {
-			std::cout << "\t" << ext << std::endl;
-		}
-
-		if (enableValidationLayers) {
-			extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-		}
-
-		return extensions;
-	}
-
-
+	// validationLayers matches in checkValidationLayerSupport and initLogicalDevice
 	std::vector<char const *> const validationLayers = {
 		"VK_LAYER_KHRONOS_validation"
 	};
@@ -204,134 +442,12 @@ struct VulkanCommon {
 		return true;
 	}
 
-	struct QueueFamilyIndices {
-		std::optional<uint32_t> graphicsFamily;
-		std::optional<uint32_t> presentFamily;
-	
-		bool isComplete() {
-			return graphicsFamily.has_value()
-				&& presentFamily.has_value();
-		}
-	};
-
-	VkPhysicalDevice physicalDevice = {};
-		
-	virtual void initPhysicalDevice() {
-		uint32_t deviceCount = {};
-		vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr);
-		if (!deviceCount) {
-			throw Common::Exception() << "failed to find GPUs with Vulkan support!";
-		}
-		std::vector<VkPhysicalDevice> devices(deviceCount);
-		vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
-		
-		std::cout << "devices:" << std::endl;
-		for (auto const & device : devices) {
-			VkPhysicalDeviceProperties deviceProperties;
-			vkGetPhysicalDeviceProperties(device, &deviceProperties);
-			std::cout 
-				<< "\t"
-				<< deviceProperties.deviceName 
-				<< " type=" << deviceProperties.deviceType
-				<< std::endl;
-
-			if (isDeviceSuitable(device)) {
-				physicalDevice = device;
-				break;
-			}
-		}
-
-		if (physicalDevice == VK_NULL_HANDLE) {
-			throw Common::Exception() << "failed to find a suitable GPU!";
-		}
-	}
-
-	bool isDeviceSuitable(VkPhysicalDevice device) {
-
-#if 0	// i'm not seeing queue families indices and the actual device info query overlap
-		// or is querying individual devices properties not a thing anymore?
-		// do you just search for the queue family bit?  graphics? compute? whatever?
-
-		VkPhysicalDeviceProperties deviceProperties;
-		vkGetPhysicalDeviceProperties(device, &deviceProperties);
-		VkPhysicalDeviceFeatures deviceFeatures;
-		vkGetPhysicalDeviceFeatures(device, &deviceFeatures);
-		// TODO sort by score and pick the best
-		return deviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU
-			|| deviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU
-			|| deviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU
-		;
-			// && deviceFeatures.geometryShader;
-#endif
-
-		QueueFamilyIndices indices = findQueueFamilies(device);
-		
-		bool extensionsSupported = checkDeviceExtensionSupport(device);
-
-		bool swapChainAdequate = false;
-		if (extensionsSupported) {
-			SwapChainSupportDetails swapChainSupport = querySwapChainSupport(device);
-			swapChainAdequate = !swapChainSupport.formats.empty() && !swapChainSupport.presentModes.empty();
-		}
-
-		return indices.isComplete() 
-			&& extensionsSupported 
-			&& swapChainAdequate;
-	}
-
-	bool checkDeviceExtensionSupport(VkPhysicalDevice device) {
-		uint32_t extensionCount;
-		vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, nullptr);
-
-		std::vector<VkExtensionProperties> availableExtensions(extensionCount);
-		vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, availableExtensions.data());
-
-		std::set<std::string> requiredExtensions(deviceExtensions.begin(), deviceExtensions.end());
-
-		for (const auto& extension : availableExtensions) {
-			requiredExtensions.erase(extension.extensionName);
-		}
-
-		return requiredExtensions.empty();
-	}
-
-	QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device) {
-		QueueFamilyIndices indices;
-
-		uint32_t queueFamilyCount = 0;
-		vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, nullptr);
-		std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
-		vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamilies.data());
-
-
-		for (uint32_t i = 0; i < queueFamilies.size(); ++i) {
-			auto const & f = queueFamilies[i];
-			if (f.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
-				indices.graphicsFamily = i;
-			}
-	
-			VkBool32 presentSupport = false;
-			vkGetPhysicalDeviceSurfaceSupportKHR(device, i, surface, &presentSupport);
-			if (presentSupport) {
-				indices.presentFamily = i;
-			}
-			
-			if (indices.isComplete()) return indices;
-		}
-
-		throw Common::Exception() << "couldn't find all indices";
-	}
-	
 	VkDevice device = {};
 	VkQueue graphicsQueue;
+	VkQueue presentQueue;
 
-	std::vector<char const *> const deviceExtensions = {
-		VK_KHR_SWAPCHAIN_EXTENSION_NAME
-	};
-
-
-	virtual void initLogicalDevice() {
-		QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
+	virtual void initLogicalDevice(VulkanPhysicalDevice * const physicalDevice) {
+		auto indices = VulkanPhysicalDevice::findQueueFamilies((*physicalDevice)(), (*surface)());
 
 		std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
 		std::set<uint32_t> uniqueQueueFamilies = {
@@ -368,7 +484,7 @@ struct VulkanCommon {
 			createInfo.enabledLayerCount = 0;
 		}
 		{
-			VkResult res = vkCreateDevice(physicalDevice, &createInfo, nullptr, &device);
+			VkResult res = vkCreateDevice((*physicalDevice)(), &createInfo, nullptr, &device);
 			if (res != VK_SUCCESS) throw Common::Exception() << "vkCreateDevice failed: " << res;
 		}
 	
@@ -376,31 +492,14 @@ struct VulkanCommon {
 		vkGetDeviceQueue(device, indices.presentFamily.value(), 0, &presentQueue);
 	}
 
-
-	VkSurfaceKHR surface;
-	VkQueue presentQueue;
-		
-	virtual void initSurface() {
-		// https://vulkan-tutorial.com/Drawing_a_triangle/Presentation/Window_surface
-		if (!SDL_Vulkan_CreateSurface(app->getWindow(), instance, &surface)) {
-			 throw Common::Exception() << "vkCreateWaylandSurfaceKHR failed: " << SDL_GetError();
-		}
-	}
-
-	struct SwapChainSupportDetails {
-		VkSurfaceCapabilitiesKHR capabilities;
-		std::vector<VkSurfaceFormatKHR> formats;
-		std::vector<VkPresentModeKHR> presentModes;
-	};
-
 	VkSwapchainKHR swapChain;
 	std::vector<VkImage> swapChainImages;
 	VkFormat swapChainImageFormat;
 	VkExtent2D swapChainExtent;
 	std::vector<VkImageView> swapChainImageViews;
 		
-	void initSwapChain() {
-		SwapChainSupportDetails swapChainSupport = querySwapChainSupport(physicalDevice);
+	void initSwapChain(VulkanPhysicalDevice * const physicalDevice) {
+		auto swapChainSupport = VulkanPhysicalDevice::querySwapChainSupport((*physicalDevice)(), (*surface)());
 
 		VkSurfaceFormatKHR surfaceFormat = chooseSwapSurfaceFormat(swapChainSupport.formats);
 		VkPresentModeKHR presentMode = chooseSwapPresentMode(swapChainSupport.presentModes);
@@ -413,7 +512,7 @@ struct VulkanCommon {
 
 		VkSwapchainCreateInfoKHR createInfo{};
 		createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
-		createInfo.surface = surface;
+		createInfo.surface = (*surface)();
 
 		createInfo.minImageCount = imageCount;
 		createInfo.imageFormat = surfaceFormat.format;
@@ -422,7 +521,7 @@ struct VulkanCommon {
 		createInfo.imageArrayLayers = 1;
 		createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
-		QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
+		auto indices = VulkanPhysicalDevice::findQueueFamilies((*physicalDevice)(), (*surface)());
 		uint32_t queueFamilyIndices[] = {indices.graphicsFamily.value(), indices.presentFamily.value()};
 
 		if (indices.graphicsFamily != indices.presentFamily) {
@@ -486,30 +585,6 @@ struct VulkanCommon {
 
 			return actualExtent;
 		}
-	}
-
-	SwapChainSupportDetails querySwapChainSupport(VkPhysicalDevice device) {
-		SwapChainSupportDetails details;
-
-		vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device, surface, &details.capabilities);
-
-		uint32_t formatCount;
-		vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &formatCount, nullptr);
-
-		if (formatCount != 0) {
-			details.formats.resize(formatCount);
-			vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &formatCount, details.formats.data());
-		}
-
-		uint32_t presentModeCount;
-		vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &presentModeCount, nullptr);
-
-		if (presentModeCount != 0) {
-			details.presentModes.resize(presentModeCount);
-			vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &presentModeCount, details.presentModes.data());
-		}
-
-		return details;
 	}
 	
 	void initImageView() {
