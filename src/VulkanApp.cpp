@@ -24,9 +24,9 @@
 // why do I think there are already similar classes in vulkan.hpp?
 
 struct VulkanInstance {
-protected:	
+protected:
 	VkInstance instance = {};
-public:	
+public:
 	decltype(instance) operator()() const { return instance; }
 
 	~VulkanInstance() {
@@ -104,7 +104,7 @@ protected:
 };
 
 struct VulkanDebugMessenger {
-protected:	
+protected:
 	VkDebugUtilsMessengerEXT debugMessenger = {};
 	VkInstance instance;	//from VulkanCommon, needs to be held for dtor to work
 	
@@ -156,7 +156,7 @@ protected:
 };
 
 struct VulkanSurface {
-protected:	
+protected:
 	VkSurfaceKHR surface;
 	VkInstance instance;	//from VulkanCommon, needs to be held for dtor to work
 public:
@@ -176,7 +176,7 @@ public:
 };
 
 struct VulkanPhysicalDevice {
-protected:	
+protected:
 	VkPhysicalDevice physicalDevice = {};
 public:
 	decltype(physicalDevice) operator()() const { return physicalDevice; }
@@ -198,9 +198,9 @@ public:
 		for (auto const & device : devices) {
 			VkPhysicalDeviceProperties deviceProperties;
 			vkGetPhysicalDeviceProperties(device, &deviceProperties);
-			std::cout 
+			std::cout
 				<< "\t"
-				<< deviceProperties.deviceName 
+				<< deviceProperties.deviceName
 				<< " type=" << deviceProperties.deviceType
 				<< std::endl;
 
@@ -246,8 +246,8 @@ protected:
 			swapChainAdequate = !swapChainSupport.formats.empty() && !swapChainSupport.presentModes.empty();
 		}
 
-		return indices.isComplete() 
-			&& extensionsSupported 
+		return indices.isComplete()
+			&& extensionsSupported
 			&& swapChainAdequate;
 	}
 
@@ -347,171 +347,35 @@ public:
 
 		return details;
 	}
-	
-
 };
 
-// so I don't have to prefix all my fields and names
-struct VulkanCommon {
-	::SDLApp::SDLApp const * app = {};	// points back to the owner
+// validationLayers matches in checkValidationLayerSupport and initLogicalDevice
+std::vector<char const *> validationLayers = {
+	"VK_LAYER_KHRONOS_validation"
+};
 
-#if 0	// not working on my vulkan implementation
-	static constexpr bool const enableValidationLayers = true;
-#else
-	static constexpr bool const enableValidationLayers = false;
-#endif
 
-	std::unique_ptr<VulkanInstance> instance;
-	std::unique_ptr<VulkanDebugMessenger> debug;	// optional
-	std::unique_ptr<VulkanSurface> surface;
-	
-	VkRenderPass renderPass = {};
-	VkPipelineLayout pipelineLayout = {};
-	VkPipeline graphicsPipeline = {};
-    
-	VkCommandPool commandPool = {};
-    std::vector<VkCommandBuffer> commandBuffers;
-	std::vector<VkSemaphore> imageAvailableSemaphores;
-    std::vector<VkSemaphore> renderFinishedSemaphores;
-    std::vector<VkFence> inFlightFences;
-    uint32_t currentFrame = 0;
-    
-	bool framebufferResized = false;
-
-	// used by 
-	//	VulkanPhysicalDevice::checkDeviceExtensionSupport
-	//	initLogicalDevice
-	std::vector<char const *> const deviceExtensions = {
-		VK_KHR_SWAPCHAIN_EXTENSION_NAME
-	};
-
-	//ok now we're at the point where we are recreating objects dependent on physicalDevice so
-	std::unique_ptr<VulkanPhysicalDevice> physicalDevice;
-
-	VulkanCommon(::SDLApp::SDLApp const * const app_) 
-	: app(app_) {
-		// TODO half tempting to put this inside debug init instead of here
-		if (enableValidationLayers && !checkValidationLayerSupport()) {
-			throw Common::Exception() << "validation layers requested, but not available!";
-		}
-
-		// hmm, maybe instance should be a shared_ptr and then passed to debug, surface, and physicalDevice ?
-		instance = std::make_unique<VulkanInstance>(app, enableValidationLayers);
-		
-		if (enableValidationLayers) {
-			debug = std::make_unique<VulkanDebugMessenger>((*instance)());
-		}
-		
-		surface = std::make_unique<VulkanSurface>(app, (*instance)());
-		
-		// used in other inits  ... initLogicalDevice and initSwapChain
-		// so we don't need to store this as a member, but only a scoped var for the duration of the ctor
-		physicalDevice = std::make_unique<VulkanPhysicalDevice>((*instance)(), (*surface)(), deviceExtensions);
-		initLogicalDevice(physicalDevice.get());
-		initSwapChain(physicalDevice.get());
-		initImageViews();
-		initRenderPass();
-		initGraphicsPipeline();
-		initFramebuffers();
-		initCommandPool(physicalDevice.get());
-        initCommandBuffers();
-        initSyncObjects();
-	}
-
-	static constexpr int MAX_FRAMES_IN_FLIGHT = 2;
-
-	~VulkanCommon() {
-		cleanupSwapChain();
-		
-		if (graphicsPipeline) vkDestroyPipeline(device, graphicsPipeline, nullptr);
-		if (pipelineLayout) vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
-		if (renderPass) vkDestroyRenderPass(device, renderPass, nullptr);
-
-		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-			vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
-			vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
-			vkDestroyFence(device, inFlightFences[i], nullptr);
-       	}
-
-		vkDestroyCommandPool(device, commandPool, nullptr);
-
-		if (device) vkDestroyDevice(device, nullptr);
-		surface = nullptr;
-		debug = nullptr;
-		instance = nullptr;
-	}
-
-	void cleanupSwapChain() {
-        for (auto framebuffer : swapChainFramebuffers) {
-            vkDestroyFramebuffer(device, framebuffer, nullptr);
-        }
-        for (auto imageView : swapChainImageViews) {
-            vkDestroyImageView(device, imageView, nullptr);
-        }
-        if (swapChain) vkDestroySwapchainKHR(device, swapChain, nullptr);
-	}
-
-    void recreateSwapChain() {
-		
-#if 0 //hmm why are there multiple events?        
-        int width = app->getScreenSize().x;
-		int height = app->getScreenSize().y;
-		glfwGetFramebufferSize(window, &width, &height);
-        while (width == 0 || height == 0) {
-            glfwGetFramebufferSize(window, &width, &height);
-            glfwWaitEvents();
-        }
-#else
-		if (!app->getScreenSize().x ||
-			!app->getScreenSize().y)
-		{
-			throw Common::Exception() << "here";
-		}
-#endif
-        vkDeviceWaitIdle(device);
-
-        cleanupSwapChain();
-
-        initSwapChain(physicalDevice.get());
-        initImageViews();
-        initFramebuffers();
-    }
-
-	// validationLayers matches in checkValidationLayerSupport and initLogicalDevice
-	std::vector<char const *> const validationLayers = {
-		"VK_LAYER_KHRONOS_validation"
-	};
-
-	bool checkValidationLayerSupport() {
-		uint32_t layerCount;
-		vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
-
-		std::vector<VkLayerProperties> availableLayers(layerCount);
-		vkEnumerateInstanceLayerProperties(&layerCount, availableLayers.data());
-
-		for (char const * const layerName : validationLayers) {
-			bool layerFound = false;
-			for (auto const & layerProperties : availableLayers) {
-				if (strcmp(layerName, layerProperties.layerName) == 0) {
-					layerFound = true;
-					break;
-				}
-			}
-
-			if (!layerFound) {
-				return false;
-			}
-		}
-
-		return true;
-	}
-
+struct VulkanLogicalDevice {
+protected:
 	VkDevice device = {};
-	VkQueue graphicsQueue;
-	VkQueue presentQueue;
+public:
+	VkQueue graphicsQueue = {};
+	VkQueue presentQueue = {};
 
-	virtual void initLogicalDevice(VulkanPhysicalDevice * const physicalDevice) {
-		auto indices = VulkanPhysicalDevice::findQueueFamilies((*physicalDevice)(), (*surface)());
+public:
+	decltype(device) operator()() const { return device; }
+	
+	~VulkanLogicalDevice() {
+		if (device) vkDestroyDevice(device, nullptr);
+	}
+	
+	VulkanLogicalDevice(
+		VkPhysicalDevice physicalDevice,
+		VkSurfaceKHR surface,
+		std::vector<char const *> const & deviceExtensions,
+		bool enableValidationLayers
+	) {
+		auto indices = VulkanPhysicalDevice::findQueueFamilies(physicalDevice, surface);
 
 		std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
 		std::set<uint32_t> uniqueQueueFamilies = {
@@ -548,25 +412,75 @@ struct VulkanCommon {
 			createInfo.enabledLayerCount = 0;
 		}
 		
-		VULKAN_SAFE(vkCreateDevice, (*physicalDevice)(), &createInfo, nullptr, &device);
+		VULKAN_SAFE(vkCreateDevice, physicalDevice, &createInfo, nullptr, &device);
 	
 		vkGetDeviceQueue(device, indices.graphicsFamily.value(), 0, &graphicsQueue);
 		vkGetDeviceQueue(device, indices.presentFamily.value(), 0, &presentQueue);
 	}
 
+	static bool checkValidationLayerSupport() {
+		uint32_t layerCount;
+		vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
+
+		std::vector<VkLayerProperties> availableLayers(layerCount);
+		vkEnumerateInstanceLayerProperties(&layerCount, availableLayers.data());
+
+		for (char const * const layerName : validationLayers) {
+			bool layerFound = false;
+			for (auto const & layerProperties : availableLayers) {
+				if (strcmp(layerName, layerProperties.layerName) == 0) {
+					layerFound = true;
+					break;
+				}
+			}
+
+			if (!layerFound) {
+				return false;
+			}
+		}
+
+		return true;
+	}
+};
+
+struct VulkanSwapChain {
+protected:
 	VkSwapchainKHR swapChain;
+public:
 	std::vector<VkImage> swapChainImages;
 	VkFormat swapChainImageFormat;
 	VkExtent2D swapChainExtent;
 	std::vector<VkImageView> swapChainImageViews;
     std::vector<VkFramebuffer> swapChainFramebuffers;
+	
+protected:
+	// hold for this class lifespan
+	VkDevice device;
+
+public:
+	decltype(swapChain) operator()() const { return swapChain; }
 		
-	void initSwapChain(VulkanPhysicalDevice * const physicalDevice) {
-		auto swapChainSupport = VulkanPhysicalDevice::querySwapChainSupport((*physicalDevice)(), (*surface)());
+	~VulkanSwapChain() {
+	    for (auto framebuffer : swapChainFramebuffers) {
+            vkDestroyFramebuffer(device, framebuffer, nullptr);
+        }
+        for (auto imageView : swapChainImageViews) {
+            vkDestroyImageView(device, imageView, nullptr);
+        }
+        if (swapChain) vkDestroySwapchainKHR(device, swapChain, nullptr);
+	}
+	
+	VulkanSwapChain(
+		::SDLApp::SDLApp const * const app,
+		VulkanPhysicalDevice * const physicalDevice,
+		VkDevice device_,
+		VkSurfaceKHR surface
+	) : device(device_) {
+		auto swapChainSupport = VulkanPhysicalDevice::querySwapChainSupport((*physicalDevice)(), surface);
 
 		VkSurfaceFormatKHR surfaceFormat = chooseSwapSurfaceFormat(swapChainSupport.formats);
 		VkPresentModeKHR presentMode = chooseSwapPresentMode(swapChainSupport.presentModes);
-		VkExtent2D extent = chooseSwapExtent(swapChainSupport.capabilities);
+		VkExtent2D extent = chooseSwapExtent(app, swapChainSupport.capabilities);
 
 		uint32_t imageCount = swapChainSupport.capabilities.minImageCount + 1;
 		if (swapChainSupport.capabilities.maxImageCount > 0 && imageCount > swapChainSupport.capabilities.maxImageCount) {
@@ -575,7 +489,7 @@ struct VulkanCommon {
 
 		VkSwapchainCreateInfoKHR createInfo = {};
 		createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
-		createInfo.surface = (*surface)();
+		createInfo.surface = surface;
 
 		createInfo.minImageCount = imageCount;
 		createInfo.imageFormat = surfaceFormat.format;
@@ -584,7 +498,7 @@ struct VulkanCommon {
 		createInfo.imageArrayLayers = 1;
 		createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
-		auto indices = VulkanPhysicalDevice::findQueueFamilies((*physicalDevice)(), (*surface)());
+		auto indices = VulkanPhysicalDevice::findQueueFamilies((*physicalDevice)(), surface);
 		uint32_t queueFamilyIndices[] = {indices.graphicsFamily.value(), indices.presentFamily.value()};
 
 		if (indices.graphicsFamily != indices.presentFamily) {
@@ -609,7 +523,8 @@ struct VulkanCommon {
 		swapChainImageFormat = surfaceFormat.format;
 		swapChainExtent = extent;
 	}
-		
+
+public:
 	VkSurfaceFormatKHR chooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats) {
 		for (const auto& availableFormat : availableFormats) {
 			if (availableFormat.format == VK_FORMAT_B8G8R8A8_SRGB && availableFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
@@ -619,7 +534,7 @@ struct VulkanCommon {
 
 		return availableFormats[0];
 	}
-	
+
 	VkPresentModeKHR chooseSwapPresentMode(const std::vector<VkPresentModeKHR>& availablePresentModes) {
 		for (const auto& availablePresentMode : availablePresentModes) {
 			if (availablePresentMode == VK_PRESENT_MODE_MAILBOX_KHR) {
@@ -630,7 +545,10 @@ struct VulkanCommon {
 		return VK_PRESENT_MODE_FIFO_KHR;
 	}
 
-	VkExtent2D chooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities) {
+	VkExtent2D chooseSwapExtent(
+		::SDLApp::SDLApp const * const app,
+		VkSurfaceCapabilitiesKHR const & capabilities
+	) {
 		if (capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max()) {
 			return capabilities.currentExtent;
 		} else {
@@ -645,16 +563,141 @@ struct VulkanCommon {
 			return actualExtent;
 		}
 	}
-	
-	void initImageViews() {
-		swapChainImageViews.resize(swapChainImages.size());
+};
 
-		for (size_t i = 0; i < swapChainImages.size(); i++) {
+// so I don't have to prefix all my fields and names
+struct VulkanCommon {
+	::SDLApp::SDLApp const * app = {};	// points back to the owner
+
+#if 0	// not working on my vulkan implementation
+	static constexpr bool const enableValidationLayers = true;
+#else
+	static constexpr bool const enableValidationLayers = false;
+#endif
+
+	std::unique_ptr<VulkanInstance> instance;
+	std::unique_ptr<VulkanDebugMessenger> debug;	// optional
+	std::unique_ptr<VulkanSurface> surface;
+	std::unique_ptr<VulkanLogicalDevice> device;
+	std::unique_ptr<VulkanSwapChain> swapChain;
+	
+	VkRenderPass renderPass = {};
+	VkPipelineLayout pipelineLayout = {};
+	VkPipeline graphicsPipeline = {};
+    
+	VkCommandPool commandPool = {};
+    std::vector<VkCommandBuffer> commandBuffers;
+	std::vector<VkSemaphore> imageAvailableSemaphores;
+    std::vector<VkSemaphore> renderFinishedSemaphores;
+    std::vector<VkFence> inFlightFences;
+    uint32_t currentFrame = 0;
+    
+	bool framebufferResized = false;
+
+	// used by
+	//	VulkanPhysicalDevice::checkDeviceExtensionSupport
+	//	initLogicalDevice
+	std::vector<char const *> const deviceExtensions = {
+		VK_KHR_SWAPCHAIN_EXTENSION_NAME
+	};
+
+	//ok now we're at the point where we are recreating objects dependent on physicalDevice so
+	std::unique_ptr<VulkanPhysicalDevice> physicalDevice;
+
+	VulkanCommon(::SDLApp::SDLApp const * const app_)
+	: app(app_) {
+		if (enableValidationLayers && !VulkanLogicalDevice::checkValidationLayerSupport()) {
+			throw Common::Exception() << "validation layers requested, but not available!";
+		}
+
+		// hmm, maybe instance should be a shared_ptr and then passed to debug, surface, and physicalDevice ?
+		instance = std::make_unique<VulkanInstance>(app, enableValidationLayers);
+		
+		if (enableValidationLayers) {
+			debug = std::make_unique<VulkanDebugMessenger>((*instance)());
+		}
+		
+		surface = std::make_unique<VulkanSurface>(app, (*instance)());
+		
+		physicalDevice = std::make_unique<VulkanPhysicalDevice>((*instance)(), (*surface)(), deviceExtensions);
+		device = std::make_unique<VulkanLogicalDevice>((*physicalDevice)(), (*surface)(), deviceExtensions, enableValidationLayers);
+		swapChain = std::make_unique<VulkanSwapChain>(
+			app,
+			physicalDevice.get(),
+			(*device)(),
+			(*surface)()
+		);
+		initImageViews();
+		initRenderPass();
+		initGraphicsPipeline();
+		initFramebuffers();
+		initCommandPool(physicalDevice.get());
+        initCommandBuffers();
+        initSyncObjects();
+	}
+
+	static constexpr int MAX_FRAMES_IN_FLIGHT = 2;
+
+	~VulkanCommon() {
+		swapChain = nullptr;
+		
+		if (graphicsPipeline) vkDestroyPipeline((*device)(), graphicsPipeline, nullptr);
+		if (pipelineLayout) vkDestroyPipelineLayout((*device)(), pipelineLayout, nullptr);
+		if (renderPass) vkDestroyRenderPass((*device)(), renderPass, nullptr);
+
+		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+			vkDestroySemaphore((*device)(), renderFinishedSemaphores[i], nullptr);
+			vkDestroySemaphore((*device)(), imageAvailableSemaphores[i], nullptr);
+			vkDestroyFence((*device)(), inFlightFences[i], nullptr);
+       	}
+
+		vkDestroyCommandPool((*device)(), commandPool, nullptr);
+		
+		device = nullptr;
+		surface = nullptr;
+		debug = nullptr;
+		instance = nullptr;
+	}
+
+    void recreateSwapChain() {
+		
+#if 0 //hmm why are there multiple events?
+        int width = app->getScreenSize().x;
+		int height = app->getScreenSize().y;
+		glfwGetFramebufferSize(window, &width, &height);
+        while (width == 0 || height == 0) {
+            glfwGetFramebufferSize(window, &width, &height);
+            glfwWaitEvents();
+        }
+#else
+		if (!app->getScreenSize().x ||
+			!app->getScreenSize().y)
+		{
+			throw Common::Exception() << "here";
+		}
+#endif
+        vkDeviceWaitIdle((*device)());
+
+		swapChain = std::make_unique<VulkanSwapChain>(
+			app,
+			physicalDevice.get(),
+			(*device)(),
+			(*surface)()
+		);
+        
+		initImageViews();
+        initFramebuffers();
+    }
+		
+	void initImageViews() {
+		swapChain->swapChainImageViews.resize(swapChain->swapChainImages.size());
+
+		for (size_t i = 0; i < swapChain->swapChainImages.size(); i++) {
 			VkImageViewCreateInfo createInfo = {};
 			createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-			createInfo.image = swapChainImages[i];
+			createInfo.image = swapChain->swapChainImages[i];
 			createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-			createInfo.format = swapChainImageFormat;
+			createInfo.format = swapChain->swapChainImageFormat;
 			createInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
 			createInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
 			createInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
@@ -665,7 +708,7 @@ struct VulkanCommon {
 			createInfo.subresourceRange.baseArrayLayer = 0;
 			createInfo.subresourceRange.layerCount = 1;
 
-			VULKAN_SAFE(vkCreateImageView, device, &createInfo, nullptr, &swapChainImageViews[i]);
+			VULKAN_SAFE(vkCreateImageView, (*device)(), &createInfo, nullptr, &swapChain->swapChainImageViews[i]);
 		}
 	}
 		
@@ -755,7 +798,7 @@ struct VulkanCommon {
 		pipelineLayoutInfo.setLayoutCount = 0;
 		pipelineLayoutInfo.pushConstantRangeCount = 0;
 
-		VULKAN_SAFE(vkCreatePipelineLayout, device, &pipelineLayoutInfo, nullptr, &pipelineLayout);
+		VULKAN_SAFE(vkCreatePipelineLayout, (*device)(), &pipelineLayoutInfo, nullptr, &pipelineLayout);
 
 		VkGraphicsPipelineCreateInfo pipelineInfo{};
 		pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
@@ -773,10 +816,10 @@ struct VulkanCommon {
 		pipelineInfo.subpass = 0;
 		pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
 
-		VULKAN_SAFE(vkCreateGraphicsPipelines, device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline);
+		VULKAN_SAFE(vkCreateGraphicsPipelines, (*device)(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline);
 
-		vkDestroyShaderModule(device, fragShaderModule, nullptr);
-		vkDestroyShaderModule(device, vertShaderModule, nullptr);
+		vkDestroyShaderModule((*device)(), fragShaderModule, nullptr);
+		vkDestroyShaderModule((*device)(), vertShaderModule, nullptr);
 	}
 
 	VkShaderModule createShaderModule(std::string const & code) {
@@ -786,13 +829,13 @@ struct VulkanCommon {
 		createInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
 
 		VkShaderModule shaderModule;
-		VULKAN_SAFE(vkCreateShaderModule, device, &createInfo, nullptr, &shaderModule);
+		VULKAN_SAFE(vkCreateShaderModule, (*device)(), &createInfo, nullptr, &shaderModule);
 		return shaderModule;
 	}
 
 	void initRenderPass() {
 		VkAttachmentDescription colorAttachment = {};
-		colorAttachment.format = swapChainImageFormat;
+		colorAttachment.format = swapChain->swapChainImageFormat;
 		colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
 		colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
 		colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -827,15 +870,15 @@ struct VulkanCommon {
         renderPassInfo.dependencyCount = 1;
         renderPassInfo.pDependencies = &dependency;
 
-		VULKAN_SAFE(vkCreateRenderPass, device, &renderPassInfo, nullptr, &renderPass);
+		VULKAN_SAFE(vkCreateRenderPass, (*device)(), &renderPassInfo, nullptr, &renderPass);
 	}
 
     void initFramebuffers() {
-        swapChainFramebuffers.resize(swapChainImageViews.size());
+        swapChain->swapChainFramebuffers.resize(swapChain->swapChainImageViews.size());
 
-        for (size_t i = 0; i < swapChainImageViews.size(); i++) {
+        for (size_t i = 0; i < swapChain->swapChainImageViews.size(); i++) {
             VkImageView attachments[] = {
-                swapChainImageViews[i]
+                swapChain->swapChainImageViews[i]
             };
 
             VkFramebufferCreateInfo framebufferInfo{};
@@ -843,11 +886,11 @@ struct VulkanCommon {
             framebufferInfo.renderPass = renderPass;
             framebufferInfo.attachmentCount = 1;
             framebufferInfo.pAttachments = attachments;
-            framebufferInfo.width = swapChainExtent.width;
-            framebufferInfo.height = swapChainExtent.height;
+            framebufferInfo.width = swapChain->swapChainExtent.width;
+            framebufferInfo.height = swapChain->swapChainExtent.height;
             framebufferInfo.layers = 1;
 
-            if (vkCreateFramebuffer(device, &framebufferInfo, nullptr, &swapChainFramebuffers[i]) != VK_SUCCESS) {
+            if (vkCreateFramebuffer((*device)(), &framebufferInfo, nullptr, &swapChain->swapChainFramebuffers[i]) != VK_SUCCESS) {
                 throw std::runtime_error("failed to create framebuffer!");
             }
         }
@@ -861,7 +904,7 @@ struct VulkanCommon {
         poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
         poolInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily.value();
 
-        if (vkCreateCommandPool(device, &poolInfo, nullptr, &commandPool) != VK_SUCCESS) {
+        if (vkCreateCommandPool((*device)(), &poolInfo, nullptr, &commandPool) != VK_SUCCESS) {
             throw std::runtime_error("failed to create command pool!");
         }
     }
@@ -874,7 +917,7 @@ struct VulkanCommon {
         allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         allocInfo.commandBufferCount = (uint32_t) commandBuffers.size();
 
-        if (vkAllocateCommandBuffers(device, &allocInfo, commandBuffers.data()) != VK_SUCCESS) {
+        if (vkAllocateCommandBuffers((*device)(), &allocInfo, commandBuffers.data()) != VK_SUCCESS) {
             throw std::runtime_error("failed to allocate command buffers!");
         }
     }
@@ -890,9 +933,9 @@ struct VulkanCommon {
         VkRenderPassBeginInfo renderPassInfo{};
         renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
         renderPassInfo.renderPass = renderPass;
-        renderPassInfo.framebuffer = swapChainFramebuffers[imageIndex];
+        renderPassInfo.framebuffer = swapChain->swapChainFramebuffers[imageIndex];
         renderPassInfo.renderArea.offset = {0, 0};
-        renderPassInfo.renderArea.extent = swapChainExtent;
+        renderPassInfo.renderArea.extent = swapChain->swapChainExtent;
 
         VkClearValue clearColor = {{{0.0f, 0.0f, 0.0f, 1.0f}}};
         renderPassInfo.clearValueCount = 1;
@@ -905,16 +948,16 @@ struct VulkanCommon {
             VkViewport viewport{};
             viewport.x = 0.0f;
             viewport.y = 0.0f;
-            viewport.width = (float) swapChainExtent.width;
-            viewport.height = (float) swapChainExtent.height;
+            viewport.width = (float)swapChain->swapChainExtent.width;
+            viewport.height = (float)swapChain->swapChainExtent.height;
             viewport.minDepth = 0.0f;
             viewport.maxDepth = 1.0f;
             vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
 
             VkRect2D scissor{};
             scissor.offset = {0, 0};
-            scissor.extent = swapChainExtent;
-            vkCmdSetScissor(commandBuffer, 0, 1, &scissor);            
+            scissor.extent = swapChain->swapChainExtent;
+            vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
             vkCmdDraw(commandBuffer, 3, 1, 0, 0);
 
@@ -938,19 +981,19 @@ struct VulkanCommon {
         fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
         for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-			if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &imageAvailableSemaphores[i]) != VK_SUCCESS ||
-				vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderFinishedSemaphores[i]) != VK_SUCCESS ||
-				vkCreateFence(device, &fenceInfo, nullptr, &inFlightFences[i]) != VK_SUCCESS) {
+			if (vkCreateSemaphore((*device)(), &semaphoreInfo, nullptr, &imageAvailableSemaphores[i]) != VK_SUCCESS ||
+				vkCreateSemaphore((*device)(), &semaphoreInfo, nullptr, &renderFinishedSemaphores[i]) != VK_SUCCESS ||
+				vkCreateFence((*device)(), &fenceInfo, nullptr, &inFlightFences[i]) != VK_SUCCESS) {
 				throw std::runtime_error("failed to create synchronization objects for a frame!");
 			}
 		}
     }
 
     void drawFrame() {
-        vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
+        vkWaitForFences((*device)(), 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
 
         uint32_t imageIndex;
-        VkResult result = vkAcquireNextImageKHR(device, swapChain, UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
+        VkResult result = vkAcquireNextImageKHR((*device)(), (*swapChain)(), UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
 
         if (result == VK_ERROR_OUT_OF_DATE_KHR) {
             recreateSwapChain();
@@ -959,7 +1002,7 @@ struct VulkanCommon {
             throw std::runtime_error("failed to acquire swap chain image!");
         }
 
-        vkResetFences(device, 1, &inFlightFences[currentFrame]);
+        vkResetFences((*device)(), 1, &inFlightFences[currentFrame]);
 
         vkResetCommandBuffer(commandBuffers[currentFrame], /*VkCommandBufferResetFlagBits*/ 0);
         recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
@@ -980,7 +1023,7 @@ struct VulkanCommon {
         submitInfo.signalSemaphoreCount = 1;
         submitInfo.pSignalSemaphores = signalSemaphores;
 
-        if (vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFences[currentFrame]) != VK_SUCCESS) {
+        if (vkQueueSubmit(device->graphicsQueue, 1, &submitInfo, inFlightFences[currentFrame]) != VK_SUCCESS) {
             throw std::runtime_error("failed to submit draw command buffer!");
         }
 
@@ -990,13 +1033,13 @@ struct VulkanCommon {
         presentInfo.waitSemaphoreCount = 1;
         presentInfo.pWaitSemaphores = signalSemaphores;
 
-        VkSwapchainKHR swapChains[] = {swapChain};
+        VkSwapchainKHR swapChains[] = {(*swapChain)()};
         presentInfo.swapchainCount = 1;
         presentInfo.pSwapchains = swapChains;
 
         presentInfo.pImageIndices = &imageIndex;
 
-        result = vkQueuePresentKHR(presentQueue, &presentInfo);
+        result = vkQueuePresentKHR(device->presentQueue, &presentInfo);
 
         if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized) {
             framebufferResized = false;
@@ -1009,7 +1052,7 @@ struct VulkanCommon {
     }
 
 	void loopDone() {
-        vkDeviceWaitIdle(device);
+        vkDeviceWaitIdle((*device)());
 	}
 };
 
