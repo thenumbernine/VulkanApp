@@ -17,18 +17,21 @@ end
 -- wait I thought res/ was copied into dist resource path by default?
 function postBuildDist(resPath)
 	print"compiling shaders..."
+	local tool
 	local function compileShader(from, to)
 		from = 'res/'..from
 		to = resPath..'/'..to
 		if not needsUpdate(to, {from}) then return end
 		-- hmm, external tool ...
-		exec('clspv "'..from..'" -o "'..to..'"')
+		exec(tool..' "'..from..'" -o "'..to..'"')
 	end
-	--[[ if I had glslc
+	-- [[ if I had glslc
+	tool = 'glslangValidator -V'
 	compileShader('shader.vert', 'shader-vert.spv')
 	compileShader('shader.frag', 'shader-frag.spv')
 	--]]
-	-- [[ but I have clspv
+	--[[ but I have clspv
+	tool = 'clspv'
 	compileShader('shader-vert.cl', 'shader-vert.spv')
 	compileShader('shader-frag.cl', 'shader-frag.spv')
 	--]]

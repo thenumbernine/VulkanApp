@@ -296,7 +296,6 @@ public:
 		std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
 		vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, queueFamilies.data());
 
-
 		for (uint32_t i = 0; i < queueFamilies.size(); ++i) {
 			auto const & f = queueFamilies[i];
 			if (f.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
@@ -624,21 +623,20 @@ struct VulkanCommon {
 		vertShaderStageInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;
 		vertShaderStageInfo.module = vertShaderModule;
 		// GLSL uses 'main', but clspv doesn't allow 'main', so ....
-		//vertShaderStageInfo.pName = "main";
-		vertShaderStageInfo.pName = "vert";
+		vertShaderStageInfo.pName = "main";
+		//vertShaderStageInfo.pName = "vert";
 
 		VkPipelineShaderStageCreateInfo fragShaderStageInfo = {};
 		fragShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
 		fragShaderStageInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
 		fragShaderStageInfo.module = fragShaderModule;
-		//fragShaderStageInfo.pName = "main";
-		fragShaderStageInfo.pName = "frag";
+		fragShaderStageInfo.pName = "main";
+		//fragShaderStageInfo.pName = "frag";
 
 		VkPipelineShaderStageCreateInfo shaderStages[] = {
 			vertShaderStageInfo,
 			fragShaderStageInfo,
 		};
-
 		
 		VkPipelineVertexInputStateCreateInfo vertexInputInfo = {};
 		vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;

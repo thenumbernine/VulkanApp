@@ -1,4 +1,4 @@
-void kernel frag(
+kernel void frag(
 	global float4 const * const varyingColor,
 	global float4 * const gl_FragColor
 ) {

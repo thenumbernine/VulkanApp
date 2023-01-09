@@ -1,4 +1,4 @@
-void kernel vert(
+kernel void vert(
 	global float4 const * const gl_Vertex,
 	global float4 * const gl_Position,
 	global float4 * const varyingColor
