@@ -913,173 +913,32 @@ public:
 	}
 };
 
-// so I don't have to prefix all my fields and names
-struct VulkanCommon {
-	::SDLApp::SDLApp const * app = {};	// points back to the owner
-
-#if 0	// not working on my vulkan implementation
-	static constexpr bool const enableValidationLayers = true;
-#else
-	static constexpr bool const enableValidationLayers = false;
-#endif
-
-	std::unique_ptr<VulkanInstance> instance;
-	std::unique_ptr<VulkanDebugMessenger> debug;	// optional
-	std::unique_ptr<VulkanSurface> surface;
-	std::unique_ptr<VulkanLogicalDevice> device;
-	std::unique_ptr<VulkanSwapChain> swapChain;
+struct VulkanGraphicsPipeline {
+protected:
+	//owned:
+	VkPipeline handle = {};
+	VkPipelineLayout pipelineLayout = {};
 	std::unique_ptr<VulkanDescriptorSetLayout> descriptorSetLayout;
 	
-	VkPipelineLayout pipelineLayout = {};
-	VkPipeline graphicsPipeline = {};
-	VkCommandPool commandPool = {};
-	
-	VkBuffer vertexBuffer = {};
-	VkDeviceMemory vertexBufferMemory = {};
-	VkBuffer indexBuffer = {};
-	VkDeviceMemory indexBufferMemory = {};
+	//held:
+	VkDevice device = {};				//held for dtor
+public:
+	decltype(handle) operator()() const { return handle; }
 
-	std::vector<VkBuffer> uniformBuffers;
-	std::vector<VkDeviceMemory> uniformBuffersMemory;
-	std::vector<void*> uniformBuffersMapped;
-
-	std::vector<VkCommandBuffer> commandBuffers;
-	std::vector<VkSemaphore> imageAvailableSemaphores;
-	std::vector<VkSemaphore> renderFinishedSemaphores;
-	std::vector<VkFence> inFlightFences;
-	uint32_t currentFrame = {};
-	
-	bool framebufferResized = {};
-
-	// used by
-	//	VulkanPhysicalDevice::checkDeviceExtensionSupport
-	//	initLogicalDevice
-	std::vector<char const *> const deviceExtensions = {
-		VK_KHR_SWAPCHAIN_EXTENSION_NAME
-	};
-
-	//ok now we're at the point where we are recreating objects dependent on physicalDevice so
-	std::unique_ptr<VulkanPhysicalDevice> physicalDevice;
-
-	VulkanCommon(::SDLApp::SDLApp const * const app_)
-	: app(app_) {
-		if (enableValidationLayers && !checkValidationLayerSupport()) {
-			throw Common::Exception() << "validation layers requested, but not available!";
-		}
-
-		// hmm, maybe instance should be a shared_ptr and then passed to debug, surface, and physicalDevice ?
-		instance = std::make_unique<VulkanInstance>(app, enableValidationLayers);
-		
-		if (enableValidationLayers) {
-			debug = std::make_unique<VulkanDebugMessenger>(instance.get());
-		}
-		
-		surface = std::make_unique<VulkanSurface>(app->getWindow(), (*instance)());
-		
-		physicalDevice = std::make_unique<VulkanPhysicalDevice>(instance.get(), (*surface)(), deviceExtensions);
-		device = std::make_unique<VulkanLogicalDevice>(physicalDevice.get(), (*surface)(), deviceExtensions, enableValidationLayers);
-		
-		swapChain = std::make_unique<VulkanSwapChain>(
-			app->getScreenSize(),
-			physicalDevice.get(),
-			(*device)(),
-			(*surface)()
-		);
-		
-		descriptorSetLayout = std::make_unique<VulkanDescriptorSetLayout>((*device)());
-		
-		initGraphicsPipeline();
-		initCommandPool(physicalDevice.get());
-		initVertexBuffer();
-		initIndexBuffer();
-		initUniformBuffers();
-		initCommandBuffers();
-		initSyncObjects();
-	}
-
-	// this is out of place
-	static bool checkValidationLayerSupport() {
-		auto availableLayers = vulkanEnum<VkLayerProperties>(
-			NAME_PAIR(vkEnumerateInstanceLayerProperties)
-		);
-		for (char const * const layerName : validationLayers) {
-			bool layerFound = false;
-			for (auto const & layerProperties : availableLayers) {
-				if (!strcmp(layerName, layerProperties.layerName)) {
-					layerFound = true;
-					break;
-				}
-			}
-			if (!layerFound) {
-				return false;
-			}
-		}
-		return true;
-	}
-
-	static constexpr int MAX_FRAMES_IN_FLIGHT = 2;
-
-	~VulkanCommon() {
-		swapChain = nullptr;
-		
-		if (graphicsPipeline) vkDestroyPipeline((*device)(), graphicsPipeline, nullptr);
-		if (pipelineLayout) vkDestroyPipelineLayout((*device)(), pipelineLayout, nullptr);
-
-		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-			vkDestroyBuffer((*device)(), uniformBuffers[i], nullptr);
-			vkFreeMemory((*device)(), uniformBuffersMemory[i], nullptr);
-		}
-
+	~VulkanGraphicsPipeline() {
+		if (pipelineLayout) vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
+		if (handle) vkDestroyPipeline(device, handle, nullptr);
 		descriptorSetLayout = nullptr;
-
-		vkDestroyBuffer((*device)(), indexBuffer, nullptr);
-		vkFreeMemory((*device)(), indexBufferMemory, nullptr);
-		
-		vkDestroyBuffer((*device)(), vertexBuffer, nullptr);
-		vkFreeMemory((*device)(), vertexBufferMemory, nullptr);
-
-		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-			vkDestroySemaphore((*device)(), renderFinishedSemaphores[i], nullptr);
-			vkDestroySemaphore((*device)(), imageAvailableSemaphores[i], nullptr);
-			vkDestroyFence((*device)(), inFlightFences[i], nullptr);
-		}
-
-		vkDestroyCommandPool((*device)(), commandPool, nullptr);
-		
-		device = nullptr;
-		surface = nullptr;
-		debug = nullptr;
-		instance = nullptr;
 	}
 
-	void recreateSwapChain() {
+	VulkanGraphicsPipeline(
+		VkDevice device_,
+		VkRenderPass renderPass
+	) : device(device_) {
 		
-#if 0 //hmm why are there multiple events?
-		int width = app->getScreenSize().x;
-		int height = app->getScreenSize().y;
-		glfwGetFramebufferSize(window, &width, &height);
-		while (width == 0 || height == 0) {
-			glfwGetFramebufferSize(window, &width, &height);
-			glfwWaitEvents();
-		}
-#else
-		if (!app->getScreenSize().x ||
-			!app->getScreenSize().y)
-		{
-			throw Common::Exception() << "here";
-		}
-#endif
-		vkDeviceWaitIdle((*device)());
+		//only used by graphicsPipeline
+		descriptorSetLayout = std::make_unique<VulkanDescriptorSetLayout>(device);
 
-		swapChain = std::make_unique<VulkanSwapChain>(
-			app->getScreenSize(),
-			physicalDevice.get(),
-			(*device)(),
-			(*surface)()
-		);
-	}
-	
-	void initGraphicsPipeline() {
 		auto vertShaderCode = Common::File::read("shader-vert.spv");
 		auto fragShaderCode = Common::File::read("shader-frag.spv");
 
@@ -1169,7 +1028,7 @@ struct VulkanCommon {
 		pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
 		pipelineLayoutInfo.setLayoutCount = static_cast<uint32_t>(descriptorSetLayouts.size());
 		pipelineLayoutInfo.pSetLayouts = descriptorSetLayouts.data();
-		VULKAN_SAFE(vkCreatePipelineLayout, (*device)(), &pipelineLayoutInfo, nullptr, &pipelineLayout);
+		VULKAN_SAFE(vkCreatePipelineLayout, device, &pipelineLayoutInfo, nullptr, &pipelineLayout);
 
 		VkPipelineShaderStageCreateInfo shaderStages[] = {
 			vertShaderStageInfo,
@@ -1188,15 +1047,16 @@ struct VulkanCommon {
 		pipelineInfo.pColorBlendState = &colorBlending;
 		pipelineInfo.pDynamicState = &dynamicState;
 		pipelineInfo.layout = pipelineLayout;
-		pipelineInfo.renderPass = swapChain->getRenderPass();
+		pipelineInfo.renderPass = renderPass;
 		pipelineInfo.subpass = 0;
 		pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
-		VULKAN_SAFE(vkCreateGraphicsPipelines, (*device)(), (VkPipelineCache)VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline);
+		VULKAN_SAFE(vkCreateGraphicsPipelines, device, (VkPipelineCache)VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &handle);
 
-		vkDestroyShaderModule((*device)(), fragShaderModule, nullptr);
-		vkDestroyShaderModule((*device)(), vertShaderModule, nullptr);
+		vkDestroyShaderModule(device, fragShaderModule, nullptr);
+		vkDestroyShaderModule(device, vertShaderModule, nullptr);
 	}
 
+protected:
 	VkShaderModule createShaderModule(std::string const & code) {
 		VkShaderModuleCreateInfo createInfo = {};
 		createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -1204,8 +1064,168 @@ struct VulkanCommon {
 		createInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
 
 		VkShaderModule shaderModule;
-		VULKAN_SAFE(vkCreateShaderModule, (*device)(), &createInfo, nullptr, &shaderModule);
+		VULKAN_SAFE(vkCreateShaderModule, device, &createInfo, nullptr, &shaderModule);
 		return shaderModule;
+	}
+};
+
+// so I don't have to prefix all my fields and names
+struct VulkanCommon {
+	::SDLApp::SDLApp const * app = {};	// points back to the owner
+
+#if 0	// not working on my vulkan implementation
+	static constexpr bool const enableValidationLayers = true;
+#else
+	static constexpr bool const enableValidationLayers = false;
+#endif
+
+	std::unique_ptr<VulkanInstance> instance;
+	std::unique_ptr<VulkanDebugMessenger> debug;	// optional
+	std::unique_ptr<VulkanSurface> surface;
+	std::unique_ptr<VulkanLogicalDevice> device;
+	std::unique_ptr<VulkanSwapChain> swapChain;
+	std::unique_ptr<VulkanGraphicsPipeline> graphicsPipeline;
+	
+	VkCommandPool commandPool = {};
+	
+	VkBuffer vertexBuffer = {};
+	VkDeviceMemory vertexBufferMemory = {};
+	VkBuffer indexBuffer = {};
+	VkDeviceMemory indexBufferMemory = {};
+
+	std::vector<VkBuffer> uniformBuffers;
+	std::vector<VkDeviceMemory> uniformBuffersMemory;
+	std::vector<void*> uniformBuffersMapped;
+
+	std::vector<VkCommandBuffer> commandBuffers;
+	std::vector<VkSemaphore> imageAvailableSemaphores;
+	std::vector<VkSemaphore> renderFinishedSemaphores;
+	std::vector<VkFence> inFlightFences;
+	uint32_t currentFrame = {};
+	
+	bool framebufferResized = {};
+
+	// used by
+	//	VulkanPhysicalDevice::checkDeviceExtensionSupport
+	//	initLogicalDevice
+	std::vector<char const *> const deviceExtensions = {
+		VK_KHR_SWAPCHAIN_EXTENSION_NAME
+	};
+
+	//ok now we're at the point where we are recreating objects dependent on physicalDevice so
+	std::unique_ptr<VulkanPhysicalDevice> physicalDevice;
+
+	VulkanCommon(::SDLApp::SDLApp const * const app_)
+	: app(app_) {
+		if (enableValidationLayers && !checkValidationLayerSupport()) {
+			throw Common::Exception() << "validation layers requested, but not available!";
+		}
+
+		// hmm, maybe instance should be a shared_ptr and then passed to debug, surface, and physicalDevice ?
+		instance = std::make_unique<VulkanInstance>(app, enableValidationLayers);
+		
+		if (enableValidationLayers) {
+			debug = std::make_unique<VulkanDebugMessenger>(instance.get());
+		}
+		
+		surface = std::make_unique<VulkanSurface>(app->getWindow(), (*instance)());
+		
+		physicalDevice = std::make_unique<VulkanPhysicalDevice>(instance.get(), (*surface)(), deviceExtensions);
+		device = std::make_unique<VulkanLogicalDevice>(physicalDevice.get(), (*surface)(), deviceExtensions, enableValidationLayers);
+		
+		swapChain = std::make_unique<VulkanSwapChain>(
+			app->getScreenSize(),
+			physicalDevice.get(),
+			(*device)(),
+			(*surface)()
+		);
+		
+		graphicsPipeline = std::make_unique<VulkanGraphicsPipeline>((*device)(), swapChain->getRenderPass());
+		
+		initCommandPool(physicalDevice.get());
+		initVertexBuffer();
+		initIndexBuffer();
+		initUniformBuffers();
+		initCommandBuffers();
+		initSyncObjects();
+	}
+
+	// this is out of place
+	static bool checkValidationLayerSupport() {
+		auto availableLayers = vulkanEnum<VkLayerProperties>(
+			NAME_PAIR(vkEnumerateInstanceLayerProperties)
+		);
+		for (char const * const layerName : validationLayers) {
+			bool layerFound = false;
+			for (auto const & layerProperties : availableLayers) {
+				if (!strcmp(layerName, layerProperties.layerName)) {
+					layerFound = true;
+					break;
+				}
+			}
+			if (!layerFound) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	static constexpr int MAX_FRAMES_IN_FLIGHT = 2;
+
+	~VulkanCommon() {
+		swapChain = nullptr;
+		graphicsPipeline = nullptr;
+
+		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+			vkDestroyBuffer((*device)(), uniformBuffers[i], nullptr);
+			vkFreeMemory((*device)(), uniformBuffersMemory[i], nullptr);
+		}
+
+		vkDestroyBuffer((*device)(), indexBuffer, nullptr);
+		vkFreeMemory((*device)(), indexBufferMemory, nullptr);
+		
+		vkDestroyBuffer((*device)(), vertexBuffer, nullptr);
+		vkFreeMemory((*device)(), vertexBufferMemory, nullptr);
+
+		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+			vkDestroySemaphore((*device)(), renderFinishedSemaphores[i], nullptr);
+			vkDestroySemaphore((*device)(), imageAvailableSemaphores[i], nullptr);
+			vkDestroyFence((*device)(), inFlightFences[i], nullptr);
+		}
+
+		vkDestroyCommandPool((*device)(), commandPool, nullptr);
+		
+		device = nullptr;
+		surface = nullptr;
+		debug = nullptr;
+		instance = nullptr;
+	}
+
+	void recreateSwapChain() {
+		
+#if 0 //hmm why are there multiple events?
+		int width = app->getScreenSize().x;
+		int height = app->getScreenSize().y;
+		glfwGetFramebufferSize(window, &width, &height);
+		while (width == 0 || height == 0) {
+			glfwGetFramebufferSize(window, &width, &height);
+			glfwWaitEvents();
+		}
+#else
+		if (!app->getScreenSize().x ||
+			!app->getScreenSize().y)
+		{
+			throw Common::Exception() << "here";
+		}
+#endif
+		vkDeviceWaitIdle((*device)());
+
+		swapChain = std::make_unique<VulkanSwapChain>(
+			app->getScreenSize(),
+			physicalDevice.get(),
+			(*device)(),
+			(*surface)()
+		);
 	}
 
 	void initCommandPool(VulkanPhysicalDevice const * physicalDevice) {
@@ -1420,7 +1440,7 @@ struct VulkanCommon {
 		vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
 		{
-			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, (*graphicsPipeline)());
 
 			VkViewport viewport = {};
 			viewport.x = 0;
