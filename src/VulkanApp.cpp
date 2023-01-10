@@ -966,7 +966,6 @@ public:
 			device,
 			Common::File::read("shader-vert.spv")
 		);
-
 		VkPipelineShaderStageCreateInfo vertShaderStageInfo = {};
 		vertShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
 		vertShaderStageInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;
@@ -979,7 +978,6 @@ public:
 			device,
 			Common::File::read("shader-frag.spv")
 		);
-
 		VkPipelineShaderStageCreateInfo fragShaderStageInfo = {};
 		fragShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
 		fragShaderStageInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -987,14 +985,13 @@ public:
 		fragShaderStageInfo.pName = "main";
 		//fragShaderStageInfo.pName = "frag";
 
+		auto bindingDescription = Vertex::getBindingDescription();
+		auto attributeDescriptions = Vertex::getAttributeDescriptions();
+
 		VkPipelineVertexInputStateCreateInfo vertexInputInfo = {};
 		vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-
-		auto bindingDescription = Vertex::getBindingDescription();
 		vertexInputInfo.vertexBindingDescriptionCount = 1;
 		vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
-		
-		auto attributeDescriptions = Vertex::getAttributeDescriptions();
 		vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
 		vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
 
@@ -1080,7 +1077,95 @@ public:
 		pipelineInfo.subpass = 0;
 		pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
 		VULKAN_SAFE(vkCreateGraphicsPipelines, device, (VkPipelineCache)VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &handle);
+	}
+};
 
+struct VulkanCommandPool {
+protected:
+	//owned
+	VkCommandPool handle = {};
+	//held:
+	VkDevice device = {};
+public:
+	decltype(handle) operator()() const { return handle; }
+
+	~VulkanCommandPool() {
+		if (handle) vkDestroyCommandPool(device, handle, nullptr);
+	}
+	VulkanCommandPool(
+		VulkanPhysicalDevice const * const physicalDevice,
+		VkSurfaceKHR surface,
+		VkDevice device_
+	) : device(device_) {
+		auto queueFamilyIndices = physicalDevice->findQueueFamilies(surface);
+		VkCommandPoolCreateInfo poolInfo = {};
+		poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+		poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+		poolInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily.value();
+		VULKAN_SAFE(vkCreateCommandPool, device, &poolInfo, nullptr, &handle);
+	}
+};
+
+struct VulkanDeviceMemoryBuffer {
+protected:
+	//owns
+	VkBuffer handle = {};
+	VkDeviceMemory memory = {};
+	//holds
+	VkDevice device = {};
+public:
+	decltype(handle) operator()() const { return handle; }
+	VkDeviceMemory getMemory() const { return memory; }
+
+	~VulkanDeviceMemoryBuffer() {
+		if (handle) vkDestroyBuffer(device, handle, nullptr);
+		if (memory) vkFreeMemory(device, memory, nullptr);
+	}
+	
+	VulkanDeviceMemoryBuffer(
+		VulkanPhysicalDevice const * const physicalDevice,
+		VkDevice device_,
+		VkDeviceSize size,
+		VkBufferUsageFlags usage,
+		VkMemoryPropertyFlags properties
+	) : device(device_) {
+		VkBufferCreateInfo bufferInfo = {};
+		bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+		bufferInfo.size = size;
+		bufferInfo.usage = usage;
+		bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+		VULKAN_SAFE(vkCreateBuffer, device, &bufferInfo, nullptr, &handle);
+
+		VkMemoryRequirements memRequirements;
+		vkGetBufferMemoryRequirements(device, handle, &memRequirements);
+
+		VkMemoryAllocateInfo allocInfo = {};
+		allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+		allocInfo.allocationSize = memRequirements.size;
+		allocInfo.memoryTypeIndex = findMemoryType(physicalDevice, memRequirements.memoryTypeBits, properties);
+
+		VULKAN_SAFE(vkAllocateMemory, device, &allocInfo, nullptr, &memory);
+
+		vkBindBufferMemory(device, handle, memory, 0);
+	}
+
+protected:
+	static uint32_t findMemoryType(
+		VulkanPhysicalDevice const * const physicalDevice,
+		uint32_t typeFilter,
+		VkMemoryPropertyFlags properties
+	) {
+		VkPhysicalDeviceMemoryProperties memProperties;
+		vkGetPhysicalDeviceMemoryProperties((*physicalDevice)(), &memProperties);
+
+		for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
+			if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
+				return i;
+			}
+		}
+
+		throw Common::Exception() << ("failed to find suitable memory type!");
 	}
 };
 
@@ -1100,16 +1185,12 @@ struct VulkanCommon {
 	std::unique_ptr<VulkanLogicalDevice> device;
 	std::unique_ptr<VulkanSwapChain> swapChain;
 	std::unique_ptr<VulkanGraphicsPipeline> graphicsPipeline;
+	std::unique_ptr<VulkanCommandPool> commandPool;
 	
-	VkCommandPool commandPool = {};
+	std::unique_ptr<VulkanDeviceMemoryBuffer> vertexBuffer;
+	std::unique_ptr<VulkanDeviceMemoryBuffer> indexBuffer;
+	std::vector<std::unique_ptr<VulkanDeviceMemoryBuffer>> uniformBuffers;
 	
-	VkBuffer vertexBuffer = {};
-	VkDeviceMemory vertexBufferMemory = {};
-	VkBuffer indexBuffer = {};
-	VkDeviceMemory indexBufferMemory = {};
-
-	std::vector<VkBuffer> uniformBuffers;
-	std::vector<VkDeviceMemory> uniformBuffersMemory;
 	std::vector<void*> uniformBuffersMapped;
 
 	std::vector<VkCommandBuffer> commandBuffers;
@@ -1155,9 +1236,17 @@ struct VulkanCommon {
 			(*surface)()
 		);
 		
-		graphicsPipeline = std::make_unique<VulkanGraphicsPipeline>((*device)(), swapChain->getRenderPass());
+		graphicsPipeline = std::make_unique<VulkanGraphicsPipeline>(
+			(*device)(),
+			swapChain->getRenderPass()
+		);
 		
-		initCommandPool(physicalDevice.get());
+		commandPool = std::make_unique<VulkanCommandPool>(
+			physicalDevice.get(),
+			(*surface)(),
+			(*device)()
+		);
+		
 		initVertexBuffer();
 		initIndexBuffer();
 		initUniformBuffers();
@@ -1191,16 +1280,10 @@ struct VulkanCommon {
 		swapChain = nullptr;
 		graphicsPipeline = nullptr;
 
-		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-			vkDestroyBuffer((*device)(), uniformBuffers[i], nullptr);
-			vkFreeMemory((*device)(), uniformBuffersMemory[i], nullptr);
-		}
+		uniformBuffers.clear();
 
-		vkDestroyBuffer((*device)(), indexBuffer, nullptr);
-		vkFreeMemory((*device)(), indexBufferMemory, nullptr);
-		
-		vkDestroyBuffer((*device)(), vertexBuffer, nullptr);
-		vkFreeMemory((*device)(), vertexBufferMemory, nullptr);
+		indexBuffer = nullptr;
+		vertexBuffer = nullptr;
 
 		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
 			vkDestroySemaphore((*device)(), renderFinishedSemaphores[i], nullptr);
@@ -1208,8 +1291,7 @@ struct VulkanCommon {
 			vkDestroyFence((*device)(), inFlightFences[i], nullptr);
 		}
 
-		vkDestroyCommandPool((*device)(), commandPool, nullptr);
-		
+		commandPool = nullptr;
 		device = nullptr;
 		surface = nullptr;
 		debug = nullptr;
@@ -1243,23 +1325,12 @@ struct VulkanCommon {
 		);
 	}
 
-	void initCommandPool(VulkanPhysicalDevice const * physicalDevice) {
-		auto queueFamilyIndices = physicalDevice->findQueueFamilies((*surface)());
-
-		VkCommandPoolCreateInfo poolInfo = {};
-		poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-		poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-		poolInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily.value();
-
-		VULKAN_SAFE(vkCreateCommandPool, (*device)(), &poolInfo, nullptr, &commandPool);
-	}
-
 	void initVertexBuffer() {
 		VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
 
-		VkBuffer stagingBuffer;
-		VkDeviceMemory stagingBufferMemory;
-		std::tie(stagingBuffer, stagingBufferMemory) = initBuffer(
+		VulkanDeviceMemoryBuffer stagingBuffer(
+			physicalDevice.get(),
+			(*device)(),
 			bufferSize,
 			VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
 			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
@@ -1268,31 +1339,32 @@ struct VulkanCommon {
 		void * data = {};
 		vkMapMemory(
 			(*device)(),
-			stagingBufferMemory,
+			stagingBuffer.getMemory(),
 			0,
 			bufferSize,
 			0,
 			&data
 		);
 		memcpy(data, vertices.data(), (size_t)bufferSize);
-		vkUnmapMemory((*device)(), stagingBufferMemory);
+		vkUnmapMemory((*device)(), stagingBuffer.getMemory());
 
-		std::tie(vertexBuffer, vertexBufferMemory) = initBuffer(
+		vertexBuffer = std::make_unique<VulkanDeviceMemoryBuffer>(
+			physicalDevice.get(),
+			(*device)(),
 			bufferSize,
 			VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
 			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
 		);
-		copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
-		vkDestroyBuffer((*device)(), stagingBuffer, nullptr);
-		vkFreeMemory((*device)(), stagingBufferMemory, nullptr);
+		
+		copyBuffer(stagingBuffer(), (*vertexBuffer)(), bufferSize);
 	}
 
 	void initIndexBuffer() {
 		VkDeviceSize bufferSize = sizeof(indices[0]) * indices.size();
 
-		VkBuffer stagingBuffer;
-		VkDeviceMemory stagingBufferMemory;
-		std::tie(stagingBuffer, stagingBufferMemory) = initBuffer(
+		VulkanDeviceMemoryBuffer stagingBuffer(
+			physicalDevice.get(),
+			(*device)(),
 			bufferSize,
 			VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
 			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
@@ -1301,34 +1373,35 @@ struct VulkanCommon {
 		void * data = {};
 		vkMapMemory(
 			(*device)(),
-			stagingBufferMemory,
+			stagingBuffer.getMemory(),
 			0,
 			bufferSize,
 			0,
 			&data
 		);
 		memcpy(data, indices.data(), (size_t)bufferSize);
-		vkUnmapMemory((*device)(), stagingBufferMemory);
+		vkUnmapMemory((*device)(), stagingBuffer.getMemory());
 
-		std::tie(indexBuffer, indexBufferMemory) = initBuffer(
+		indexBuffer = std::make_unique<VulkanDeviceMemoryBuffer>(
+			physicalDevice.get(),
+			(*device)(),
 			bufferSize,
 			VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
 			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
 		);
-		copyBuffer(stagingBuffer, indexBuffer, bufferSize);
-		vkDestroyBuffer((*device)(), stagingBuffer, nullptr);
-		vkFreeMemory((*device)(), stagingBufferMemory, nullptr);
+		copyBuffer(stagingBuffer(), (*indexBuffer)(), bufferSize);
 	}
 
 	void initUniformBuffers() {
 		VkDeviceSize bufferSize = sizeof(UniformBufferObject);
 
 		uniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
-		uniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
 		uniformBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
 
 		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-			std::tie(uniformBuffers[i], uniformBuffersMemory[i]) = initBuffer(
+			uniformBuffers[i] = std::make_unique<VulkanDeviceMemoryBuffer>(
+				physicalDevice.get(),
+				(*device)(),
 				bufferSize,
 				VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
 				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
@@ -1336,7 +1409,7 @@ struct VulkanCommon {
 			
 			vkMapMemory(
 				(*device)(),
-				uniformBuffersMemory[i],
+				uniformBuffers[i]->getMemory(),
 				0,
 				bufferSize,
 				0,
@@ -1345,42 +1418,11 @@ struct VulkanCommon {
 		}
 	}
 
-	std::pair<VkBuffer, VkDeviceMemory> initBuffer(
-		VkDeviceSize size,
-		VkBufferUsageFlags usage,
-		VkMemoryPropertyFlags properties
-	) {
-		VkBuffer buffer;
-		VkDeviceMemory bufferMemory;
-		
-		VkBufferCreateInfo bufferInfo = {};
-		bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-		bufferInfo.size = size;
-		bufferInfo.usage = usage;
-		bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-		VULKAN_SAFE(vkCreateBuffer, (*device)(), &bufferInfo, nullptr, &buffer);
-
-		VkMemoryRequirements memRequirements;
-		vkGetBufferMemoryRequirements((*device)(), buffer, &memRequirements);
-
-		VkMemoryAllocateInfo allocInfo = {};
-		allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-		allocInfo.allocationSize = memRequirements.size;
-		allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties);
-
-		VULKAN_SAFE(vkAllocateMemory, (*device)(), &allocInfo, nullptr, &bufferMemory);
-
-		vkBindBufferMemory((*device)(), buffer, bufferMemory, 0);
-	
-		return std::make_pair(buffer, bufferMemory);
-	}
-
 	void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size) {
 		VkCommandBufferAllocateInfo allocInfo = {};
 		allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
 		allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-		allocInfo.commandPool = commandPool;
+		allocInfo.commandPool = (*commandPool)();
 		allocInfo.commandBufferCount = 1;
 
 		VkCommandBuffer commandBuffer;
@@ -1408,28 +1450,14 @@ struct VulkanCommon {
 		vkQueueSubmit(device->graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
 		vkQueueWaitIdle(device->graphicsQueue);
 
-		vkFreeCommandBuffers((*device)(), commandPool, 1, &commandBuffer);
+		vkFreeCommandBuffers((*device)(), (*commandPool)(), 1, &commandBuffer);
 	}
-
-	uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
-		VkPhysicalDeviceMemoryProperties memProperties;
-		vkGetPhysicalDeviceMemoryProperties((*physicalDevice)(), &memProperties);
-
-		for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
-			if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
-				return i;
-			}
-		}
-
-		throw Common::Exception() << ("failed to find suitable memory type!");
-	}
-
 
 	void initCommandBuffers() {
 		commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
 		VkCommandBufferAllocateInfo allocInfo = {};
 		allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-		allocInfo.commandPool = commandPool;
+		allocInfo.commandPool = (*commandPool)();
 		allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
 		allocInfo.commandBufferCount = (uint32_t)commandBuffers.size();
 		VULKAN_SAFE(vkAllocateCommandBuffers, (*device)(), &allocInfo, commandBuffers.data());
@@ -1471,11 +1499,11 @@ struct VulkanCommon {
 			scissor.extent = swapChain->extent;
 			vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
-			VkBuffer vertexBuffers[] = {vertexBuffer};
+			VkBuffer vertexBuffers[] = {(*vertexBuffer)()};
 			VkDeviceSize offsets[] = {0};
-			vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+			vkCmdBindVertexBuffers(commandBuffer, 0, numberof(vertexBuffers), vertexBuffers, offsets);
 
-			vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT16);
+			vkCmdBindIndexBuffer(commandBuffer, (*indexBuffer)(), 0, VK_INDEX_TYPE_UINT16);
 
 			vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
 		}
