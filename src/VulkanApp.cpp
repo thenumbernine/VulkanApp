@@ -627,14 +627,42 @@ public:
 		vkGetDeviceQueue(handle, queueFamilyIndex, queueIndex, &result);
 		return result;
 	}
+	
+	void waitIdle() const {
+		VULKAN_SAFE(vkDeviceWaitIdle, handle);
+	}
 
-	VkSwapchainKHR createSwapchain(
-		VkSwapchainCreateInfoKHR const * const createInfo,
+	// maybe there's no need for these 'create' functions 
+
+#define CREATE_CREATER(name, suffix)\
+	Vk##name##suffix create##name(\
+		Vk##name##CreateInfo##suffix const * const createInfo,\
+		VkAllocationCallbacks const * const allocator = nullptr\
+	) const {\
+		Vk##name##suffix result = {};\
+		VULKAN_SAFE(vkCreate##name##suffix, handle, createInfo, allocator, &result);\
+		return result;\
+	}
+
+CREATE_CREATER(Swapchain, KHR)
+CREATE_CREATER(RenderPass, )
+CREATE_CREATER(ImageView, )
+CREATE_CREATER(Framebuffer, )
+CREATE_CREATER(DescriptorSetLayout, )
+CREATE_CREATER(ShaderModule, )
+CREATE_CREATER(PipelineLayout, )
+CREATE_CREATER(CommandPool, )
+CREATE_CREATER(Buffer, )
+
+	VkPipeline createGraphicsPipelines(
+		VkPipelineCache pipelineCache,
+		size_t numCreateInfo,
+		VkGraphicsPipelineCreateInfo const * const createInfo,
 		VkAllocationCallbacks const * const allocator = nullptr
 	) const {
-		VkSwapchainKHR swapchain = {};
-		VULKAN_SAFE(vkCreateSwapchainKHR, handle, createInfo, allocator, &swapchain);
-		return swapchain;
+		VkPipeline result = {};
+		VULKAN_SAFE(vkCreateGraphicsPipelines, handle, pipelineCache, numCreateInfo, createInfo, allocator, &result);
+		return result;
 	}
 
 	// ************** from here on down, app-specific **************  
@@ -699,9 +727,9 @@ public:
 	// ************** from here on down, app-specific **************  
 
 	VulkanRenderPass(
-		VkDevice device_,
+		VulkanLogicalDevice const * const device_,
 		VkFormat swapChainImageFormat
-	) : device(device_) {
+	) : device((*device_)()) {
 		VkAttachmentDescription colorAttachment = {};
 		colorAttachment.format = swapChainImageFormat;
 		colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -737,7 +765,7 @@ public:
 		renderPassInfo.pSubpasses = &subpass;
 		renderPassInfo.dependencyCount = 1;
 		renderPassInfo.pDependencies = &dependency;
-		VULKAN_SAFE(vkCreateRenderPass, device, &renderPassInfo, nullptr, &handle);
+		handle = device_->createRenderPass(&renderPassInfo);
 	}
 };
 
@@ -771,6 +799,11 @@ public:
 			vkDestroyImageView(device, imageView, nullptr);
 		}
 		if (handle) vkDestroySwapchainKHR(device, handle, nullptr);
+	}
+
+	// should this be a 'devices' or a 'swapchain' method?
+	std::vector<VkImage> getImages() const {
+		return vulkanEnum<VkImage>(NAME_PAIR(vkGetSwapchainImagesKHR), device, handle);
 	}
 	
 	// ************** from here on down, app-specific **************  
@@ -820,8 +853,7 @@ public:
 		createInfo.clipped = VK_TRUE;
 		handle = device_->createSwapchain(&createInfo);
 
-		images = vulkanEnum<VkImage>(NAME_PAIR(vkGetSwapchainImagesKHR), device, handle);
-
+		images = getImages();
 		imageViews.resize(images.size());
 		for (size_t i = 0; i < images.size(); i++) {
 			VkImageViewCreateInfo createInfo = {};
@@ -838,11 +870,10 @@ public:
 			createInfo.subresourceRange.levelCount = 1;
 			createInfo.subresourceRange.baseArrayLayer = 0;
 			createInfo.subresourceRange.layerCount = 1;
-			VULKAN_SAFE(vkCreateImageView, device, &createInfo, nullptr, &imageViews[i]);
+			imageViews[i] = device_->createImageView(&createInfo);
 		}
 	
-		renderPass = std::make_unique<VulkanRenderPass>(device, surfaceFormat.format);
-
+		renderPass = std::make_unique<VulkanRenderPass>(device_, surfaceFormat.format);
 		framebuffers.resize(imageViews.size());
 		for (size_t i = 0; i < imageViews.size(); i++) {
 			VkFramebufferCreateInfo framebufferInfo = {};
@@ -853,7 +884,7 @@ public:
 			framebufferInfo.width = extent.width;
 			framebufferInfo.height = extent.height;
 			framebufferInfo.layers = 1;
-			VULKAN_SAFE(vkCreateFramebuffer, device, &framebufferInfo, nullptr, &framebuffers[i]);
+			framebuffers[i] = device_->createFramebuffer(&framebufferInfo);
 		}
 	}
 
@@ -915,8 +946,8 @@ public:
 	}
 	
 	VulkanDescriptorSetLayout(
-		VkDevice device_
-	) : device(device_) {
+		VulkanLogicalDevice const * const device_
+	) : device((*device_)()) {
 		VkDescriptorSetLayoutBinding uboLayoutBinding = {};
 		uboLayoutBinding.binding = 0;
 		uboLayoutBinding.descriptorCount = 1;
@@ -928,7 +959,7 @@ public:
 		layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
 		layoutInfo.bindingCount = 1;
 		layoutInfo.pBindings = &uboLayoutBinding;
-		VULKAN_SAFE(vkCreateDescriptorSetLayout, device, &layoutInfo, nullptr, &handle);
+		handle = device_->createDescriptorSetLayout(&layoutInfo);
 	}
 };
 
@@ -947,14 +978,14 @@ public:
 	}
 	
 	VulkanShaderModule(
-		VkDevice device_,
+		VulkanLogicalDevice const * const device_,
 		std::string const code
-	) : device(device_) {
+	) : device((*device_)()) {
 		VkShaderModuleCreateInfo createInfo = {};
 		createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
 		createInfo.codeSize = code.length();
 		createInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
-		VULKAN_SAFE(vkCreateShaderModule, device, &createInfo, nullptr, &handle);
+		handle = device_->createShaderModule(&createInfo);
 	}
 };
 
@@ -977,11 +1008,11 @@ public:
 	}
 
 	VulkanGraphicsPipeline(
-		VkDevice device_,
+		VulkanLogicalDevice const * const device_,
 		VkRenderPass renderPass
-	) : device(device_) {
+	) : device((*device_)()) {
 		auto vertShaderModule = VulkanShaderModule(
-			device,
+			device_,
 			Common::File::read("shader-vert.spv")
 		);
 		VkPipelineShaderStageCreateInfo vertShaderStageInfo = {};
@@ -993,7 +1024,7 @@ public:
 		//vertShaderStageInfo.pName = "vert";
 		
 		auto fragShaderModule = VulkanShaderModule(
-			device,
+			device_,
 			Common::File::read("shader-frag.spv")
 		);
 		VkPipelineShaderStageCreateInfo fragShaderStageInfo = {};
@@ -1063,7 +1094,7 @@ public:
 		dynamicState.pDynamicStates = dynamicStates.data();
 		
 		// descriptorSetLayout is only used by graphicsPipeline
-		descriptorSetLayout = std::make_unique<VulkanDescriptorSetLayout>(device);
+		descriptorSetLayout = std::make_unique<VulkanDescriptorSetLayout>(device_);
 		std::vector<VkDescriptorSetLayout> descriptorSetLayouts = {
 			(*descriptorSetLayout)(),
 		};
@@ -1072,7 +1103,7 @@ public:
 		pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
 		pipelineLayoutInfo.setLayoutCount = static_cast<uint32_t>(descriptorSetLayouts.size());
 		pipelineLayoutInfo.pSetLayouts = descriptorSetLayouts.data();
-		VULKAN_SAFE(vkCreatePipelineLayout, device, &pipelineLayoutInfo, nullptr, &pipelineLayout);
+		pipelineLayout = device_->createPipelineLayout(&pipelineLayoutInfo);
 
 		VkPipelineShaderStageCreateInfo shaderStages[] = {
 			vertShaderStageInfo,
@@ -1094,7 +1125,7 @@ public:
 		pipelineInfo.renderPass = renderPass;
 		pipelineInfo.subpass = 0;
 		pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
-		VULKAN_SAFE(vkCreateGraphicsPipelines, device, (VkPipelineCache)VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &handle);
+		handle = device_->createGraphicsPipelines((VkPipelineCache)VK_NULL_HANDLE, 1, &pipelineInfo, nullptr);
 	}
 };
 
@@ -1113,14 +1144,14 @@ public:
 	VulkanCommandPool(
 		VulkanPhysicalDevice const * const physicalDevice,
 		VkSurfaceKHR surface,
-		VkDevice device_
-	) : device(device_) {
+		VulkanLogicalDevice const * const device_
+	) : device((*device_)()) {
 		auto queueFamilyIndices = physicalDevice->findQueueFamilies(surface);
 		VkCommandPoolCreateInfo poolInfo = {};
 		poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
 		poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
 		poolInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily.value();
-		VULKAN_SAFE(vkCreateCommandPool, device, &poolInfo, nullptr, &handle);
+		handle = device_->createCommandPool(&poolInfo);
 	}
 };
 
@@ -1139,30 +1170,33 @@ public:
 		if (handle) vkDestroyBuffer(device, handle, nullptr);
 		if (memory) vkFreeMemory(device, memory, nullptr);
 	}
-	
+
+	//only call this after handle is filled
+	VkMemoryRequirements getMemoryRequirements() const {
+		VkMemoryRequirements memRequirements = {};
+		vkGetBufferMemoryRequirements(device, handle, &memRequirements);
+		return memRequirements;
+	}
+
 	VulkanDeviceMemoryBuffer(
 		VulkanPhysicalDevice const * const physicalDevice,
-		VkDevice device_,
+		VulkanLogicalDevice const * const device_,
 		VkDeviceSize size,
 		VkBufferUsageFlags usage,
 		VkMemoryPropertyFlags properties
-	) : device(device_) {
+	) : device((*device_)()) {
 		VkBufferCreateInfo bufferInfo = {};
 		bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
 		bufferInfo.size = size;
 		bufferInfo.usage = usage;
 		bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+		handle = device_->createBuffer(&bufferInfo);
 
-		VULKAN_SAFE(vkCreateBuffer, device, &bufferInfo, nullptr, &handle);
-
-		VkMemoryRequirements memRequirements;
-		vkGetBufferMemoryRequirements(device, handle, &memRequirements);
-
+		VkMemoryRequirements memRequirements = getMemoryRequirements();
 		VkMemoryAllocateInfo allocInfo = {};
 		allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
 		allocInfo.allocationSize = memRequirements.size;
 		allocInfo.memoryTypeIndex = findMemoryType(physicalDevice, memRequirements.memoryTypeBits, properties);
-
 		VULKAN_SAFE(vkAllocateMemory, device, &allocInfo, nullptr, &memory);
 
 		vkBindBufferMemory(device, handle, memory, 0);
@@ -1188,14 +1222,14 @@ protected:
 public:
 	static std::unique_ptr<VulkanDeviceMemoryBuffer> makeFromStaged(
 		VulkanPhysicalDevice const * const physicalDevice,
-		VulkanLogicalDevice * const device,
+		VulkanLogicalDevice const * const device,
 		VulkanCommandPool const * const commandPool,
 		void const * const srcData,
 		size_t bufferSize
 	) {
 		VulkanDeviceMemoryBuffer stagingBuffer(
 			physicalDevice,
-			(*device)(),
+			device,
 			bufferSize,
 			VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
 			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
@@ -1215,7 +1249,7 @@ public:
 
 		auto buffer = std::make_unique<VulkanDeviceMemoryBuffer>(
 			physicalDevice,
-			(*device)(),
+			device,
 			bufferSize,
 			VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
 			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
@@ -1235,7 +1269,7 @@ public:
 protected:
 	//copies based on the graphicsQueue
 	static void copyBuffer(
-		VulkanLogicalDevice * const device,
+		VulkanLogicalDevice const * const device,
 		VulkanCommandPool const * const commandPool,
 		VkBuffer srcBuffer,
 		VkBuffer dstBuffer,
@@ -1347,14 +1381,14 @@ struct VulkanCommon {
 		);
 		
 		graphicsPipeline = std::make_unique<VulkanGraphicsPipeline>(
-			(*device)(),
+			device.get(),
 			swapChain->getRenderPass()
 		);
 		
 		commandPool = std::make_unique<VulkanCommandPool>(
 			physicalDevice.get(),
 			(*surface)(),
-			(*device)()
+			device.get()
 		);
 		
 		initVertexBuffer();
@@ -1424,7 +1458,7 @@ struct VulkanCommon {
 			throw Common::Exception() << "here";
 		}
 #endif
-		vkDeviceWaitIdle((*device)());
+		device->waitIdle();
 
 		swapChain = std::make_unique<VulkanSwapChain>(
 			app->getScreenSize(),
@@ -1463,7 +1497,7 @@ struct VulkanCommon {
 		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
 			uniformBuffers[i] = std::make_unique<VulkanDeviceMemoryBuffer>(
 				physicalDevice.get(),
-				(*device)(),
+				device.get(),
 				bufferSize,
 				VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
 				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
