@@ -461,6 +461,15 @@ public:
 		);
 	}
 
+	VkDevice createDevice(
+		VkDeviceCreateInfo const * const createInfo,
+		VkAllocationCallbacks const * const allocator = nullptr
+	) const {
+		VkDevice device = {};
+		VULKAN_SAFE(vkCreateDevice, handle, createInfo, allocator, &device);
+		return device;
+	}
+
 	// this is halfway app-specific.  it was in the tut's organization but I'm 50/50 if it is good design
 
 public:
@@ -619,6 +628,15 @@ public:
 		return result;
 	}
 
+	VkSwapchainKHR createSwapchain(
+		VkSwapchainCreateInfoKHR const * const createInfo,
+		VkAllocationCallbacks const * const allocator = nullptr
+	) const {
+		VkSwapchainKHR swapchain = {};
+		VULKAN_SAFE(vkCreateSwapchainKHR, handle, createInfo, allocator, &swapchain);
+		return swapchain;
+	}
+
 	// ************** from here on down, app-specific **************  
 	
 	VulkanLogicalDevice(
@@ -658,7 +676,7 @@ public:
 		} else {
 			createInfo.enabledLayerCount = 0;
 		}
-		VULKAN_SAFE(vkCreateDevice, (*physicalDevice)(), &createInfo, nullptr, &handle);
+		handle = physicalDevice->createDevice(&createInfo);
 	
 		graphicsQueue = getQueue(indices.graphicsFamily.value());
 		presentQueue = getQueue(indices.presentFamily.value());
@@ -760,9 +778,9 @@ public:
 	VulkanSwapChain(
 		Tensor::int2 screenSize,
 		VulkanPhysicalDevice * const physicalDevice,
-		VkDevice device_,
+		VulkanLogicalDevice const * const device_,
 		VkSurfaceKHR surface
-	) : device(device_) {
+	) : device((*device_)()) {
 		auto swapChainSupport = physicalDevice->querySwapChainSupport(surface);
 
 		VkSurfaceFormatKHR surfaceFormat = chooseSwapSurfaceFormat(swapChainSupport.formats);
@@ -800,7 +818,7 @@ public:
 		createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
 		createInfo.presentMode = presentMode;
 		createInfo.clipped = VK_TRUE;
-		VULKAN_SAFE(vkCreateSwapchainKHR, device, &createInfo, nullptr, &handle);
+		handle = device_->createSwapchain(&createInfo);
 
 		images = vulkanEnum<VkImage>(NAME_PAIR(vkGetSwapchainImagesKHR), device, handle);
 
@@ -1324,7 +1342,7 @@ struct VulkanCommon {
 		swapChain = std::make_unique<VulkanSwapChain>(
 			app->getScreenSize(),
 			physicalDevice.get(),
-			(*device)(),
+			device.get(),
 			(*surface)()
 		);
 		
@@ -1411,7 +1429,7 @@ struct VulkanCommon {
 		swapChain = std::make_unique<VulkanSwapChain>(
 			app->getScreenSize(),
 			physicalDevice.get(),
-			(*device)(),
+			device.get(),
 			(*surface)()
 		);
 	}
