@@ -97,32 +97,30 @@ struct Vertex {
 	Tensor::float2 pos;
 	Tensor::float3 color;
 
-	// TODO instead put fields = tuple of member refs
-	// then have a method for 'fields-to-binding-descriptions'
-	// and a method for 'fields-to-attribute-descriptions'
-	static auto getBindingDescriptions() {
-		return std::array<VkVertexInputBindingDescription, 1>{ 
-			VkVertexInputBindingDescription{
-				0,								//binding 
-				sizeof(Vertex),					//stride 
-				VK_VERTEX_INPUT_RATE_VERTEX,	//inputRate 
-			},
+	static auto getBindingDescription() {
+		return VkVertexInputBindingDescription{
+			0,								//binding
+			sizeof(Vertex),					//stride
+			VK_VERTEX_INPUT_RATE_VERTEX,	//inputRate
 		};
 	}
 
+	// TODO instead put fields = tuple of member refs
+	// then have a method for 'fields-to-binding-descriptions'
+	// and a method for 'fields-to-attribute-descriptions'
 	static auto getAttributeDescriptions() {
 		return std::array<VkVertexInputAttributeDescription, 2>{
 			VkVertexInputAttributeDescription{
-				0,							//location 
-				0,							//binding 
-				VK_FORMAT_R32G32_SFLOAT,	//format 
-				offsetof(Vertex, pos),		//offset 
+				0,							//location
+				0,							//binding
+				VK_FORMAT_R32G32_SFLOAT,	//format
+				offsetof(Vertex, pos),		//offset
 			},
 			VkVertexInputAttributeDescription{
-				1,							//location 
-				0,							//binding 
-				VK_FORMAT_R32G32B32_SFLOAT,	//format 
-				offsetof(Vertex, color),	//offset 
+				1,							//location
+				0,							//binding
+				VK_FORMAT_R32G32B32_SFLOAT,	//format
+				offsetof(Vertex, color),	//offset
 			},
 		};
 	}
@@ -350,7 +348,7 @@ protected:
 
 #if 0	// i'm not seeing queue families indices and the actual physicalDevice info query overlap
 		// or is querying individual devices properties not a thing anymore?
-		// do you just search for the queue family bit?  graphics? compute? whatever?
+		// do you just search for the queue family bit? graphics? compute? whatever?
 
 		VkPhysicalDeviceProperties deviceProperties;
 		vkGetPhysicalDeviceProperties(physicalDevice, &deviceProperties);
@@ -570,18 +568,75 @@ public:
 	}
 };
 
+struct VulkanRenderPass {
+protected:
+	//owned
+	VkRenderPass renderPass = {};
+	//held
+	VkDevice device = {};
+public:
+	decltype(renderPass) operator()() const { return renderPass; }
+	
+	~VulkanRenderPass() {
+		if (renderPass) vkDestroyRenderPass(device, renderPass, nullptr);
+	}
+
+	VulkanRenderPass(
+		VkDevice device_,
+		VkFormat swapChainImageFormat
+	) : device(device_) {
+		VkAttachmentDescription colorAttachment = {};
+		colorAttachment.format = swapChainImageFormat;
+		colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+		colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+		colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+		colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+		colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+		VkAttachmentReference colorAttachmentRef = {};
+		colorAttachmentRef.attachment = 0;
+		colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+		VkSubpassDescription subpass = {};
+		subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+		subpass.colorAttachmentCount = 1;
+		subpass.pColorAttachments = &colorAttachmentRef;
+
+		VkSubpassDependency dependency = {};
+		dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+		dependency.dstSubpass = 0;
+		dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+		dependency.srcAccessMask = 0;
+		dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+		dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+		VkRenderPassCreateInfo renderPassInfo = {};
+		renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+		renderPassInfo.attachmentCount = 1;
+		renderPassInfo.pAttachments = &colorAttachment;
+		renderPassInfo.subpassCount = 1;
+		renderPassInfo.pSubpasses = &subpass;
+		renderPassInfo.dependencyCount = 1;
+		renderPassInfo.pDependencies = &dependency;
+
+		VULKAN_SAFE(vkCreateRenderPass, device, &renderPassInfo, nullptr, &renderPass);
+	}
+};
+
 struct VulkanSwapChain {
 protected:
-	VkSwapchainKHR swapChain;
+	VkSwapchainKHR swapChain = {};
+	std::unique_ptr<VulkanRenderPass> renderPass;
 public:
-	VkFormat swapChainImageFormat;
-	VkExtent2D swapChainExtent;
+	VkExtent2D extent;
 	
 	// I would combine these into one struct so they can be dtored together
-	// but it seems vulkan wants each one linear?
-	std::vector<VkImage> swapChainImages;
-	std::vector<VkImageView> swapChainImageViews;
-	std::vector<VkFramebuffer> swapChainFramebuffers;
+	// but it seems vulkan wants VkImages linear?
+	std::vector<VkImage> images;
+	std::vector<VkImageView> imageViews;
+	std::vector<VkFramebuffer> framebuffers;
 	
 protected:
 	// hold for this class lifespan
@@ -589,12 +644,14 @@ protected:
 
 public:
 	decltype(swapChain) operator()() const { return swapChain; }
-		
+	VkRenderPass getRenderPass() const { return (*renderPass)(); }
+
 	~VulkanSwapChain() {
-		for (auto framebuffer : swapChainFramebuffers) {
+		for (auto framebuffer : framebuffers) {
 			vkDestroyFramebuffer(device, framebuffer, nullptr);
 		}
-		for (auto imageView : swapChainImageViews) {
+		renderPass = nullptr;
+		for (auto imageView : imageViews) {
 			vkDestroyImageView(device, imageView, nullptr);
 		}
 		if (swapChain) vkDestroySwapchainKHR(device, swapChain, nullptr);
@@ -604,14 +661,13 @@ public:
 		::SDLApp::SDLApp const * const app,
 		VulkanPhysicalDevice * const physicalDevice,
 		VkDevice device_,
-		VkSurfaceKHR surface,
-		VkRenderPass renderPass
+		VkSurfaceKHR surface
 	) : device(device_) {
 		auto swapChainSupport = VulkanPhysicalDevice::querySwapChainSupport((*physicalDevice)(), surface);
 
 		VkSurfaceFormatKHR surfaceFormat = chooseSwapSurfaceFormat(swapChainSupport.formats);
 		VkPresentModeKHR presentMode = chooseSwapPresentMode(swapChainSupport.presentModes);
-		VkExtent2D extent = chooseSwapExtent(app, swapChainSupport.capabilities);
+		extent = chooseSwapExtent(app, swapChainSupport.capabilities);
 
 		uint32_t imageCount = swapChainSupport.capabilities.minImageCount + 1;
 		if (swapChainSupport.capabilities.maxImageCount > 0 && imageCount > swapChainSupport.capabilities.maxImageCount) {
@@ -648,22 +704,16 @@ public:
 		VULKAN_SAFE(vkCreateSwapchainKHR, device, &createInfo, nullptr, &swapChain);
 
 		vkGetSwapchainImagesKHR(device, swapChain, &imageCount, nullptr);
-		swapChainImages.resize(imageCount);
-		vkGetSwapchainImagesKHR(device, swapChain, &imageCount, swapChainImages.data());
-
-		swapChainImageFormat = surfaceFormat.format;
-		swapChainExtent = extent;
+		images.resize(imageCount);
+		vkGetSwapchainImagesKHR(device, swapChain, &imageCount, images.data());
 	
-		// init image views:
-
-		swapChainImageViews.resize(swapChainImages.size());
-
-		for (size_t i = 0; i < swapChainImages.size(); i++) {
+		imageViews.resize(images.size());
+		for (size_t i = 0; i < images.size(); i++) {
 			VkImageViewCreateInfo createInfo = {};
 			createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-			createInfo.image = swapChainImages[i];
+			createInfo.image = images[i];
 			createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-			createInfo.format = swapChainImageFormat;
+			createInfo.format = surfaceFormat.format;
 			createInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
 			createInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
 			createInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
@@ -673,35 +723,28 @@ public:
 			createInfo.subresourceRange.levelCount = 1;
 			createInfo.subresourceRange.baseArrayLayer = 0;
 			createInfo.subresourceRange.layerCount = 1;
-
-			VULKAN_SAFE(vkCreateImageView, device, &createInfo, nullptr, &swapChainImageViews[i]);
+			VULKAN_SAFE(vkCreateImageView, device, &createInfo, nullptr, &imageViews[i]);
 		}
 	
-		// init framebuffer
+		renderPass = std::make_unique<VulkanRenderPass>(device, surfaceFormat.format);
 
-		swapChainFramebuffers.resize(swapChainImageViews.size());
-
-		for (size_t i = 0; i < swapChainImageViews.size(); i++) {
-			VkImageView attachments[] = {
-				swapChainImageViews[i],
-			};
-
+		framebuffers.resize(imageViews.size());
+		for (size_t i = 0; i < imageViews.size(); i++) {
 			VkFramebufferCreateInfo framebufferInfo = {};
 			framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-			framebufferInfo.renderPass = renderPass;
+			framebufferInfo.renderPass = (*renderPass)();
 			framebufferInfo.attachmentCount = 1;
-			framebufferInfo.pAttachments = attachments;
-			framebufferInfo.width = swapChainExtent.width;
-			framebufferInfo.height = swapChainExtent.height;
+			framebufferInfo.pAttachments = &imageViews[i];
+			framebufferInfo.width = extent.width;
+			framebufferInfo.height = extent.height;
 			framebufferInfo.layers = 1;
-
-			VULKAN_SAFE(vkCreateFramebuffer, device, &framebufferInfo, nullptr, &swapChainFramebuffers[i]);
+			VULKAN_SAFE(vkCreateFramebuffer, device, &framebufferInfo, nullptr, &framebuffers[i]);
 		}
 	}
 
-public:
-	VkSurfaceFormatKHR chooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats) {
-		for (const auto& availableFormat : availableFormats) {
+protected:
+	static VkSurfaceFormatKHR chooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats) {
+		for (auto const & availableFormat : availableFormats) {
 			if (availableFormat.format == VK_FORMAT_B8G8R8A8_SRGB && availableFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
 				return availableFormat;
 			}
@@ -710,8 +753,8 @@ public:
 		return availableFormats[0];
 	}
 
-	VkPresentModeKHR chooseSwapPresentMode(const std::vector<VkPresentModeKHR>& availablePresentModes) {
-		for (const auto& availablePresentMode : availablePresentModes) {
+	static VkPresentModeKHR chooseSwapPresentMode(const std::vector<VkPresentModeKHR>& availablePresentModes) {
+		for (auto const & availablePresentMode : availablePresentModes) {
 			if (availablePresentMode == VK_PRESENT_MODE_MAILBOX_KHR) {
 				return availablePresentMode;
 			}
@@ -720,7 +763,7 @@ public:
 		return VK_PRESENT_MODE_FIFO_KHR;
 	}
 
-	VkExtent2D chooseSwapExtent(
+	static VkExtent2D chooseSwapExtent(
 		::SDLApp::SDLApp const * const app,
 		VkSurfaceCapabilitiesKHR const & capabilities
 	) {
@@ -756,7 +799,6 @@ struct VulkanCommon {
 	std::unique_ptr<VulkanLogicalDevice> device;
 	std::unique_ptr<VulkanSwapChain> swapChain;
 	
-	VkRenderPass renderPass = {};
 	VkDescriptorSetLayout descriptorSetLayout = {};
 	VkPipelineLayout pipelineLayout = {};
 	VkPipeline graphicsPipeline = {};
@@ -806,14 +848,14 @@ struct VulkanCommon {
 		
 		physicalDevice = std::make_unique<VulkanPhysicalDevice>((*instance)(), (*surface)(), deviceExtensions);
 		device = std::make_unique<VulkanLogicalDevice>((*physicalDevice)(), (*surface)(), deviceExtensions, enableValidationLayers);
+		
 		swapChain = std::make_unique<VulkanSwapChain>(
 			app,
 			physicalDevice.get(),
 			(*device)(),
-			(*surface)(),
-			renderPass
+			(*surface)()
 		);
-		initRenderPass();
+		
 		initDescriptorSetLayout();
 		initGraphicsPipeline();
 		initCommandPool(physicalDevice.get());
@@ -831,7 +873,6 @@ struct VulkanCommon {
 		
 		if (graphicsPipeline) vkDestroyPipeline((*device)(), graphicsPipeline, nullptr);
 		if (pipelineLayout) vkDestroyPipelineLayout((*device)(), pipelineLayout, nullptr);
-		if (renderPass) vkDestroyRenderPass((*device)(), renderPass, nullptr);
 
 		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
 			vkDestroyBuffer((*device)(), uniformBuffers[i], nullptr);
@@ -850,7 +891,7 @@ struct VulkanCommon {
 			vkDestroySemaphore((*device)(), renderFinishedSemaphores[i], nullptr);
 			vkDestroySemaphore((*device)(), imageAvailableSemaphores[i], nullptr);
 			vkDestroyFence((*device)(), inFlightFences[i], nullptr);
-	   	}
+		}
 
 		vkDestroyCommandPool((*device)(), commandPool, nullptr);
 		
@@ -883,24 +924,22 @@ struct VulkanCommon {
 			app,
 			physicalDevice.get(),
 			(*device)(),
-			(*surface)(),
-			renderPass
+			(*surface)()
 		);
 	}
-		
+	
 	void initDescriptorSetLayout() {
-		VkDescriptorSetLayoutBinding uboLayoutBinding{};
+		VkDescriptorSetLayoutBinding uboLayoutBinding = {};
 		uboLayoutBinding.binding = 0;
 		uboLayoutBinding.descriptorCount = 1;
 		uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 		uboLayoutBinding.pImmutableSamplers = nullptr;
 		uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 
-		VkDescriptorSetLayoutCreateInfo layoutInfo{};
+		VkDescriptorSetLayoutCreateInfo layoutInfo = {};
 		layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
 		layoutInfo.bindingCount = 1;
 		layoutInfo.pBindings = &uboLayoutBinding;
-
 		VULKAN_SAFE(vkCreateDescriptorSetLayout, (*device)(), &layoutInfo, nullptr, &descriptorSetLayout);
 	}
 
@@ -926,17 +965,12 @@ struct VulkanCommon {
 		fragShaderStageInfo.pName = "main";
 		//fragShaderStageInfo.pName = "frag";
 
-		VkPipelineShaderStageCreateInfo shaderStages[] = {
-			vertShaderStageInfo,
-			fragShaderStageInfo,
-		};
-		
 		VkPipelineVertexInputStateCreateInfo vertexInputInfo = {};
 		vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
 
-		auto bindingDescriptions = Vertex::getBindingDescriptions();
-		vertexInputInfo.vertexBindingDescriptionCount = static_cast<uint32_t>(bindingDescriptions .size());
-		vertexInputInfo.pVertexBindingDescriptions = bindingDescriptions.data();
+		auto bindingDescription = Vertex::getBindingDescription();
+		vertexInputInfo.vertexBindingDescriptionCount = 1;
+		vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
 		
 		auto attributeDescriptions = Vertex::getAttributeDescriptions();
 		vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
@@ -957,7 +991,7 @@ struct VulkanCommon {
 		rasterizer.depthClampEnable = VK_FALSE;
 		rasterizer.rasterizerDiscardEnable = VK_FALSE;
 		rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
-		rasterizer.lineWidth = 1.0f;
+		rasterizer.lineWidth = 1;
 		rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
 		rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
 		rasterizer.depthBiasEnable = VK_FALSE;
@@ -977,10 +1011,10 @@ struct VulkanCommon {
 		colorBlending.logicOp = VK_LOGIC_OP_COPY;
 		colorBlending.attachmentCount = 1;
 		colorBlending.pAttachments = &colorBlendAttachment;
-		colorBlending.blendConstants[0] = 0.0f;
-		colorBlending.blendConstants[1] = 0.0f;
-		colorBlending.blendConstants[2] = 0.0f;
-		colorBlending.blendConstants[3] = 0.0f;
+		colorBlending.blendConstants[0] = 0;
+		colorBlending.blendConstants[1] = 0;
+		colorBlending.blendConstants[2] = 0;
+		colorBlending.blendConstants[3] = 0;
 
 		std::vector<VkDynamicState> dynamicStates = {
 			VK_DYNAMIC_STATE_VIEWPORT,
@@ -995,12 +1029,16 @@ struct VulkanCommon {
 		pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
 		pipelineLayoutInfo.setLayoutCount = 1;
 		pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout;
-
 		VULKAN_SAFE(vkCreatePipelineLayout, (*device)(), &pipelineLayoutInfo, nullptr, &pipelineLayout);
 
+		VkPipelineShaderStageCreateInfo shaderStages[] = {
+			vertShaderStageInfo,
+			fragShaderStageInfo,
+		};
+	
 		VkGraphicsPipelineCreateInfo pipelineInfo = {};
 		pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-		pipelineInfo.stageCount = 2;
+		pipelineInfo.stageCount = numberof(shaderStages);
 		pipelineInfo.pStages = shaderStages;
 		pipelineInfo.pVertexInputState = &vertexInputInfo;
 		pipelineInfo.pInputAssemblyState = &inputAssembly;
@@ -1010,10 +1048,9 @@ struct VulkanCommon {
 		pipelineInfo.pColorBlendState = &colorBlending;
 		pipelineInfo.pDynamicState = &dynamicState;
 		pipelineInfo.layout = pipelineLayout;
-		pipelineInfo.renderPass = renderPass;
+		pipelineInfo.renderPass = swapChain->getRenderPass();
 		pipelineInfo.subpass = 0;
 		pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
-
 		VULKAN_SAFE(vkCreateGraphicsPipelines, (*device)(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline);
 
 		vkDestroyShaderModule((*device)(), fragShaderModule, nullptr);
@@ -1029,46 +1066,6 @@ struct VulkanCommon {
 		VkShaderModule shaderModule;
 		VULKAN_SAFE(vkCreateShaderModule, (*device)(), &createInfo, nullptr, &shaderModule);
 		return shaderModule;
-	}
-
-	void initRenderPass() {
-		VkAttachmentDescription colorAttachment = {};
-		colorAttachment.format = swapChain->swapChainImageFormat;
-		colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-		colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-		colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-		colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-		colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-		colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-		colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-
-		VkAttachmentReference colorAttachmentRef = {};
-		colorAttachmentRef.attachment = 0;
-		colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-		VkSubpassDescription subpass = {};
-		subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-		subpass.colorAttachmentCount = 1;
-		subpass.pColorAttachments = &colorAttachmentRef;
-
-		VkSubpassDependency dependency = {};
-		dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-		dependency.dstSubpass = 0;
-		dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-		dependency.srcAccessMask = 0;
-		dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-		dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-
-		VkRenderPassCreateInfo renderPassInfo = {};
-		renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-		renderPassInfo.attachmentCount = 1;
-		renderPassInfo.pAttachments = &colorAttachment;
-		renderPassInfo.subpassCount = 1;
-		renderPassInfo.pSubpasses = &subpass;
-		renderPassInfo.dependencyCount = 1;
-		renderPassInfo.pDependencies = &dependency;
-
-		VULKAN_SAFE(vkCreateRenderPass, (*device)(), &renderPassInfo, nullptr, &renderPass);
 	}
 
 	void initCommandPool(VulkanPhysicalDevice const * physicalDevice) {
@@ -1087,7 +1084,11 @@ struct VulkanCommon {
 
 		VkBuffer stagingBuffer;
 		VkDeviceMemory stagingBufferMemory;
-		initBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
+		std::tie(stagingBuffer, stagingBufferMemory) = initBuffer(
+			bufferSize,
+			VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+		);
 
 		void * data = {};
 		vkMapMemory(
@@ -1096,32 +1097,31 @@ struct VulkanCommon {
 			0,
 			bufferSize,
 			0,
-			&data);
-			memcpy(data, vertices.data(),
-			(size_t)bufferSize
+			&data
 		);
+		memcpy(data, vertices.data(), (size_t)bufferSize);
 		vkUnmapMemory((*device)(), stagingBufferMemory);
 
-		initBuffer(
+		std::tie(vertexBuffer, vertexBufferMemory) = initBuffer(
 			bufferSize,
 			VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-			vertexBuffer,
-			vertexBufferMemory
+			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
 		);
-
 		copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
-
 		vkDestroyBuffer((*device)(), stagingBuffer, nullptr);
 		vkFreeMemory((*device)(), stagingBufferMemory, nullptr);
-	}	   
+	}
 
 	void initIndexBuffer() {
 		VkDeviceSize bufferSize = sizeof(indices[0]) * indices.size();
 
 		VkBuffer stagingBuffer;
 		VkDeviceMemory stagingBufferMemory;
-		initBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
+		std::tie(stagingBuffer, stagingBufferMemory) = initBuffer(
+			bufferSize,
+			VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+		);
 
 		void * data = {};
 		vkMapMemory(
@@ -1130,16 +1130,17 @@ struct VulkanCommon {
 			0,
 			bufferSize,
 			0,
-			&data);
-			memcpy(data, indices.data(),
-			(size_t)bufferSize
+			&data
 		);
+		memcpy(data, indices.data(), (size_t)bufferSize);
 		vkUnmapMemory((*device)(), stagingBufferMemory);
 
-		initBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, indexBuffer, indexBufferMemory);
-
+		std::tie(indexBuffer, indexBufferMemory) = initBuffer(
+			bufferSize,
+			VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+		);
 		copyBuffer(stagingBuffer, indexBuffer, bufferSize);
-
 		vkDestroyBuffer((*device)(), stagingBuffer, nullptr);
 		vkFreeMemory((*device)(), stagingBufferMemory, nullptr);
 	}
@@ -1152,19 +1153,31 @@ struct VulkanCommon {
 		uniformBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
 
 		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-			initBuffer(bufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, uniformBuffers[i], uniformBuffersMemory[i]);
+			std::tie(uniformBuffers[i], uniformBuffersMemory[i]) = initBuffer(
+				bufferSize,
+				VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+			);
 			
-			vkMapMemory((*device)(), uniformBuffersMemory[i], 0, bufferSize, 0, &uniformBuffersMapped[i]);
+			vkMapMemory(
+				(*device)(),
+				uniformBuffersMemory[i],
+				0,
+				bufferSize,
+				0,
+				&uniformBuffersMapped[i]
+			);
 		}
 	}
 
-	void initBuffer(
+	std::pair<VkBuffer, VkDeviceMemory> initBuffer(
 		VkDeviceSize size,
 		VkBufferUsageFlags usage,
-		VkMemoryPropertyFlags properties,
-		VkBuffer & buffer,
-		VkDeviceMemory & bufferMemory
+		VkMemoryPropertyFlags properties
 	) {
+		VkBuffer buffer;
+		VkDeviceMemory bufferMemory;
+		
 		VkBufferCreateInfo bufferInfo = {};
 		bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
 		bufferInfo.size = size;
@@ -1184,6 +1197,8 @@ struct VulkanCommon {
 		VULKAN_SAFE(vkAllocateMemory, (*device)(), &allocInfo, nullptr, &bufferMemory);
 
 		vkBindBufferMemory((*device)(), buffer, bufferMemory, 0);
+	
+		return std::make_pair(buffer, bufferMemory);
 	}
 
 	void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size) {
@@ -1253,10 +1268,10 @@ struct VulkanCommon {
 
 		VkRenderPassBeginInfo renderPassInfo = {};
 		renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-		renderPassInfo.renderPass = renderPass;
-		renderPassInfo.framebuffer = swapChain->swapChainFramebuffers[imageIndex];
+		renderPassInfo.renderPass = swapChain->getRenderPass();
+		renderPassInfo.framebuffer = swapChain->framebuffers[imageIndex];
 		renderPassInfo.renderArea.offset = {0, 0};
-		renderPassInfo.renderArea.extent = swapChain->swapChainExtent;
+		renderPassInfo.renderArea.extent = swapChain->extent;
 
 		VkClearValue clearColor = {{{0.0f, 0.0f, 0.0f, 1.0f}}};
 		renderPassInfo.clearValueCount = 1;
@@ -1270,15 +1285,15 @@ struct VulkanCommon {
 			VkViewport viewport = {};
 			viewport.x = 0.0f;
 			viewport.y = 0.0f;
-			viewport.width = (float)swapChain->swapChainExtent.width;
-			viewport.height = (float)swapChain->swapChainExtent.height;
+			viewport.width = (float)swapChain->extent.width;
+			viewport.height = (float)swapChain->extent.height;
 			viewport.minDepth = 0.0f;
 			viewport.maxDepth = 1.0f;
 			vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
 
 			VkRect2D scissor = {};
 			scissor.offset = {0, 0};
-			scissor.extent = swapChain->swapChainExtent;
+			scissor.extent = swapChain->extent;
 			vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
 			VkBuffer vertexBuffers[] = {vertexBuffer};
@@ -1314,9 +1329,9 @@ struct VulkanCommon {
 		}
 	}
 
-	void updateUniformBuffer(uint32_t currentImage) {
-		static auto startTime = std::chrono::high_resolution_clock::now();
-
+	decltype(std::chrono::high_resolution_clock::now()) startTime = std::chrono::high_resolution_clock::now();
+	
+	void updateUniformBuffer(uint32_t currentFrame_) {
 		auto currentTime = std::chrono::high_resolution_clock::now();
 		float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
 
@@ -1333,20 +1348,27 @@ struct VulkanCommon {
 		);
 		ubo.proj = Tensor::perspective<float>(
 			degToRad<float>(45),
-			(float)swapChain->swapChainExtent.width / (float)swapChain->swapChainExtent.height,
+			(float)swapChain->extent.width / (float)swapChain->extent.height,
 			0.1f,
 			10
 		);
 		ubo.proj[1][1] *= -1;
 
-		memcpy(uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
+		memcpy(uniformBuffersMapped[currentFrame_], &ubo, sizeof(ubo));
 	}
 
 	void drawFrame() {
 		vkWaitForFences((*device)(), 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
 
-		uint32_t imageIndex;
-		VkResult result = vkAcquireNextImageKHR((*device)(), (*swapChain)(), UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
+		uint32_t imageIndex = {};
+		VkResult result = vkAcquireNextImageKHR(
+			(*device)(),
+			(*swapChain)(),
+			UINT64_MAX,
+			imageAvailableSemaphores[currentFrame],
+			VK_NULL_HANDLE,
+			&imageIndex
+		);
 		if (result == VK_ERROR_OUT_OF_DATE_KHR) {
 			recreateSwapChain();
 			return;
