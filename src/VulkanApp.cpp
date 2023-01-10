@@ -882,6 +882,7 @@ protected:
 	}
 };
 
+//only used by VulkanGraphicsPipeline
 struct VulkanDescriptorSetLayout {
 protected:
 	VkDescriptorSetLayout handle = {};	//owned
@@ -913,6 +914,32 @@ public:
 	}
 };
 
+//only used by VulkanGraphicsPipeline's ctor
+struct VulkanShaderModule {
+protected:
+	//owned:
+	VkShaderModule handle = {};
+	//held:
+	VkDevice device = {};
+public:
+	decltype(handle) operator()() const { return handle; }
+	
+	~VulkanShaderModule() {
+		if (handle) vkDestroyShaderModule(device, handle, nullptr);
+	}
+	
+	VulkanShaderModule(
+		VkDevice device_,
+		std::string const code
+	) : device(device_) {
+		VkShaderModuleCreateInfo createInfo = {};
+		createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+		createInfo.codeSize = code.length();
+		createInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
+		VULKAN_SAFE(vkCreateShaderModule, device, &createInfo, nullptr, &handle);
+	}
+};
+
 struct VulkanGraphicsPipeline {
 protected:
 	//owned:
@@ -935,28 +962,28 @@ public:
 		VkDevice device_,
 		VkRenderPass renderPass
 	) : device(device_) {
-		
-		//only used by graphicsPipeline
-		descriptorSetLayout = std::make_unique<VulkanDescriptorSetLayout>(device);
-
-		auto vertShaderCode = Common::File::read("shader-vert.spv");
-		auto fragShaderCode = Common::File::read("shader-frag.spv");
-
-		VkShaderModule vertShaderModule = createShaderModule(vertShaderCode);
-		VkShaderModule fragShaderModule = createShaderModule(fragShaderCode);
+		auto vertShaderModule = VulkanShaderModule(
+			device,
+			Common::File::read("shader-vert.spv")
+		);
 
 		VkPipelineShaderStageCreateInfo vertShaderStageInfo = {};
 		vertShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
 		vertShaderStageInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;
-		vertShaderStageInfo.module = vertShaderModule;
-		// GLSL uses 'main', but clspv doesn't allow 'main', so ....
+		vertShaderStageInfo.module = vertShaderModule();
 		vertShaderStageInfo.pName = "main";
+		// GLSL uses 'main', but clspv doesn't allow 'main', so ....
 		//vertShaderStageInfo.pName = "vert";
+		
+		auto fragShaderModule = VulkanShaderModule(
+			device,
+			Common::File::read("shader-frag.spv")
+		);
 
 		VkPipelineShaderStageCreateInfo fragShaderStageInfo = {};
 		fragShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
 		fragShaderStageInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-		fragShaderStageInfo.module = fragShaderModule;
+		fragShaderStageInfo.module = fragShaderModule();
 		fragShaderStageInfo.pName = "main";
 		//fragShaderStageInfo.pName = "frag";
 
@@ -1019,7 +1046,9 @@ public:
 		dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
 		dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
 		dynamicState.pDynamicStates = dynamicStates.data();
-
+		
+		// descriptorSetLayout is only used by graphicsPipeline
+		descriptorSetLayout = std::make_unique<VulkanDescriptorSetLayout>(device);
 		std::vector<VkDescriptorSetLayout> descriptorSetLayouts = {
 			(*descriptorSetLayout)(),
 		};
@@ -1052,20 +1081,6 @@ public:
 		pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
 		VULKAN_SAFE(vkCreateGraphicsPipelines, device, (VkPipelineCache)VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &handle);
 
-		vkDestroyShaderModule(device, fragShaderModule, nullptr);
-		vkDestroyShaderModule(device, vertShaderModule, nullptr);
-	}
-
-protected:
-	VkShaderModule createShaderModule(std::string const & code) {
-		VkShaderModuleCreateInfo createInfo = {};
-		createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-		createInfo.codeSize = code.length();
-		createInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
-
-		VkShaderModule shaderModule;
-		VULKAN_SAFE(vkCreateShaderModule, device, &createInfo, nullptr, &shaderModule);
-		return shaderModule;
 	}
 };
 
