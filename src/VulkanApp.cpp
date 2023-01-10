@@ -7,7 +7,7 @@
 #include <vulkan/vulkan.hpp>
 #include <iostream>	//debugging only
 #include <set>
-
+#include <chrono>
 
 #define VULKAN_SAFE(x, ...) {\
 	VkResult res = x(__VA_ARGS__);\
@@ -22,48 +22,127 @@
 	}\
 }
 
-// why do I think there are already similar classes in vulkan.hpp?
+template<typename real>
+real degToRad(real x) {
+	return x * (real)(M_PI / 180.);
+}
 
+// TODO put this somewhere maybe
+
+namespace Tensor {
+
+//glRotatef
+template<typename real, typename Src>
+requires (Src::dims() == int2(4,4))
+_mat<real,4,4> rotate(
+	Src src,
+	real rad,
+	_vec<real,3> axis
+) {
+	auto q = Tensor::_quat<real>(axis.x, axis.y, axis.z, rad)
+		.fromAngleAxis();
+	auto x = q.xAxis();
+	auto y = q.yAxis();
+	auto z = q.zAxis();
+	_mat<real,4,4> mq = {
+		{x.x, y.x, z.x, 0},
+		{x.y, y.y, z.y, 0},
+		{x.z, y.z, z.z, 0},
+		{0, 0, 0, 1}
+	};
+	return src * mq;
+}
+
+//gluLookAt
+template<typename real>
+_mat<real,4,4> lookAt(
+	_vec<real,3> eye,
+	_vec<real,3> center,
+	_vec<real,3> up
+) {
+	auto l = (center - eye).normalize();
+	auto s = l.cross(up).normalize();
+	auto up2 = s.cross(l);
+	return _mat<real,4,4>{
+		{s.x, up2.x, -l.x, -eye.x},
+		{s.y, up2.y, -l.y, -eye.y},
+		{s.z, up2.z, -l.z, -eye.z},
+		{0, 0, 0, 1},
+	};
+}
+
+//gluPerspective
+template<typename real>
+_mat<real,4,4> perspective(
+	real fovy,
+	real aspectRatio,
+	real zNear,
+	real zFar
+) {
+	real f = 1./tan(fovy*(real).5);
+	real neginvdz = (real)1 / (zNear - zFar);
+	return _mat<real,4,4>{
+		{f/aspectRatio, 0, 0, 0},
+		{0, f, 0, 0},
+		{0, 0, (zFar+zNear) * neginvdz, (real)2*zFar*zNear * neginvdz},
+		{0, 0, -1, 0},
+	};
+}
+
+}
+
+// why do I think there are already similar classes in vulkan.hpp?
 
 struct Vertex {
 	Tensor::float2 pos;
 	Tensor::float3 color;
 
-	static VkVertexInputBindingDescription getBindingDescription() {
-		VkVertexInputBindingDescription bindingDescription = {};
-		bindingDescription.binding = 0;
-		bindingDescription.stride = sizeof(Vertex);
-		bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-
-		return bindingDescription;
+	// TODO instead put fields = tuple of member refs
+	// then have a method for 'fields-to-binding-descriptions'
+	// and a method for 'fields-to-attribute-descriptions'
+	static auto getBindingDescriptions() {
+		return std::array<VkVertexInputBindingDescription, 1>{ 
+			VkVertexInputBindingDescription{
+				0,								//binding 
+				sizeof(Vertex),					//stride 
+				VK_VERTEX_INPUT_RATE_VERTEX,	//inputRate 
+			},
+		};
 	}
 
-	static std::array<VkVertexInputAttributeDescription, 2> getAttributeDescriptions() {
-		std::array<VkVertexInputAttributeDescription, 2> attributeDescriptions = {};
-
-		attributeDescriptions[0].binding = 0;
-		attributeDescriptions[0].location = 0;
-		attributeDescriptions[0].format = VK_FORMAT_R32G32_SFLOAT;
-		attributeDescriptions[0].offset = offsetof(Vertex, pos);
-
-		attributeDescriptions[1].binding = 0;
-		attributeDescriptions[1].location = 1;
-		attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
-		attributeDescriptions[1].offset = offsetof(Vertex, color);
-
-		return attributeDescriptions;
+	static auto getAttributeDescriptions() {
+		return std::array<VkVertexInputAttributeDescription, 2>{
+			VkVertexInputAttributeDescription{
+				0,							//location 
+				0,							//binding 
+				VK_FORMAT_R32G32_SFLOAT,	//format 
+				offsetof(Vertex, pos),		//offset 
+			},
+			VkVertexInputAttributeDescription{
+				1,							//location 
+				0,							//binding 
+				VK_FORMAT_R32G32B32_SFLOAT,	//format 
+				offsetof(Vertex, color),	//offset 
+			},
+		};
 	}
 };
 
-const std::vector<Vertex> vertices = {
-    {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-    {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
-    {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
-    {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}
+struct UniformBufferObject {
+	Tensor::float4x4 model;
+	Tensor::float4x4 view;
+	Tensor::float4x4 proj;
 };
 
-const std::vector<uint16_t> indices = {
-    0, 1, 2, 2, 3, 0
+std::vector<Vertex> const vertices = {
+	{{-0.5f, -0.5f}, {1.f, 0.f, 0.f}},
+	{{0.5f, -0.5f}, {0.f, 1.f, 0.f}},
+	{{0.5f, 0.5f}, {0.f, 0.f, 1.f}},
+	{{-0.5f, 0.5f}, {1.f, 1.f, 1.f}}
+};
+
+std::vector<uint16_t> const indices = {
+	0, 1, 2, 2, 3, 0
 };
 
 
@@ -77,7 +156,10 @@ public:
 		if (instance) vkDestroyInstance(instance, nullptr);
 	}
 	
-	VulkanInstance(::SDLApp::SDLApp const * const app, bool enableValidationLayers) {
+	VulkanInstance(
+		::SDLApp::SDLApp const * const app,
+		bool const enableValidationLayers
+	) {
 		// vkCreateInstance needs appInfo
 		
 		VkApplicationInfo appInfo = {};
@@ -105,7 +187,7 @@ public:
 		
 		// vkCreateInstance needs layerNames
 
-		std::vector<const char *> layerNames;
+		std::vector<char const *> layerNames;
 		if (enableValidationLayers) {
 			//insert which of those into our layerName for creating something or something
 			//layerNames.push_back("VK_LAYER_LUNARG_standard_validation");	//nope
@@ -126,10 +208,12 @@ public:
 		VULKAN_SAFE(vkCreateInstance, &createInfo, nullptr, &instance);
 	}
 protected:
-	std::vector<char const *> getRequiredExtensions(::SDLApp::SDLApp const * const app, bool enableValidationLayers) {
+	std::vector<char const *> getRequiredExtensions(
+		::SDLApp::SDLApp const * const app,
+		bool const enableValidationLayers
+	) {
 		uint32_t extensionCount = {};
 		SDL_VULKAN_SAFE(SDL_Vulkan_GetInstanceExtensions, app->getWindow(), &extensionCount, nullptr);
-		
 		std::vector<const char *> extensions(extensionCount);
 		SDL_VULKAN_SAFE(SDL_Vulkan_GetInstanceExtensions, app->getWindow(), &extensionCount, extensions.data());
 
@@ -150,7 +234,7 @@ protected:
 struct VulkanDebugMessenger {
 protected:
 	VkDebugUtilsMessengerEXT debugMessenger = {};
-	VkInstance instance;	//from VulkanCommon, needs to be held for dtor to work
+	VkInstance instance;	//from VulkanCommon, needs to be accessed for dtor to work
 	
 	PFN_vkCreateDebugUtilsMessengerEXT vkCreateDebugUtilsMessengerEXT = {};
 	PFN_vkDestroyDebugUtilsMessengerEXT vkDestroyDebugUtilsMessengerEXT = {};
@@ -398,7 +482,6 @@ std::vector<char const *> validationLayers = {
 	"VK_LAYER_KHRONOS_validation"
 };
 
-
 struct VulkanLogicalDevice {
 protected:
 	VkDevice device = {};
@@ -491,9 +574,12 @@ struct VulkanSwapChain {
 protected:
 	VkSwapchainKHR swapChain;
 public:
-	std::vector<VkImage> swapChainImages;
 	VkFormat swapChainImageFormat;
 	VkExtent2D swapChainExtent;
+	
+	// I would combine these into one struct so they can be dtored together
+	// but it seems vulkan wants each one linear?
+	std::vector<VkImage> swapChainImages;
 	std::vector<VkImageView> swapChainImageViews;
 	std::vector<VkFramebuffer> swapChainFramebuffers;
 	
@@ -518,7 +604,8 @@ public:
 		::SDLApp::SDLApp const * const app,
 		VulkanPhysicalDevice * const physicalDevice,
 		VkDevice device_,
-		VkSurfaceKHR surface
+		VkSurfaceKHR surface,
+		VkRenderPass renderPass
 	) : device(device_) {
 		auto swapChainSupport = VulkanPhysicalDevice::querySwapChainSupport((*physicalDevice)(), surface);
 
@@ -566,6 +653,50 @@ public:
 
 		swapChainImageFormat = surfaceFormat.format;
 		swapChainExtent = extent;
+	
+		// init image views:
+
+		swapChainImageViews.resize(swapChainImages.size());
+
+		for (size_t i = 0; i < swapChainImages.size(); i++) {
+			VkImageViewCreateInfo createInfo = {};
+			createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+			createInfo.image = swapChainImages[i];
+			createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+			createInfo.format = swapChainImageFormat;
+			createInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+			createInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+			createInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+			createInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+			createInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+			createInfo.subresourceRange.baseMipLevel = 0;
+			createInfo.subresourceRange.levelCount = 1;
+			createInfo.subresourceRange.baseArrayLayer = 0;
+			createInfo.subresourceRange.layerCount = 1;
+
+			VULKAN_SAFE(vkCreateImageView, device, &createInfo, nullptr, &swapChainImageViews[i]);
+		}
+	
+		// init framebuffer
+
+		swapChainFramebuffers.resize(swapChainImageViews.size());
+
+		for (size_t i = 0; i < swapChainImageViews.size(); i++) {
+			VkImageView attachments[] = {
+				swapChainImageViews[i],
+			};
+
+			VkFramebufferCreateInfo framebufferInfo = {};
+			framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+			framebufferInfo.renderPass = renderPass;
+			framebufferInfo.attachmentCount = 1;
+			framebufferInfo.pAttachments = attachments;
+			framebufferInfo.width = swapChainExtent.width;
+			framebufferInfo.height = swapChainExtent.height;
+			framebufferInfo.layers = 1;
+
+			VULKAN_SAFE(vkCreateFramebuffer, device, &framebufferInfo, nullptr, &swapChainFramebuffers[i]);
+		}
 	}
 
 public:
@@ -626,15 +757,19 @@ struct VulkanCommon {
 	std::unique_ptr<VulkanSwapChain> swapChain;
 	
 	VkRenderPass renderPass = {};
+	VkDescriptorSetLayout descriptorSetLayout = {};
 	VkPipelineLayout pipelineLayout = {};
 	VkPipeline graphicsPipeline = {};
-	
 	VkCommandPool commandPool = {};
 	
-	VkBuffer vertexBuffer;
-	VkDeviceMemory vertexBufferMemory;
-    VkBuffer indexBuffer;
-    VkDeviceMemory indexBufferMemory;
+	VkBuffer vertexBuffer = {};
+	VkDeviceMemory vertexBufferMemory = {};
+	VkBuffer indexBuffer = {};
+	VkDeviceMemory indexBufferMemory = {};
+
+	std::vector<VkBuffer> uniformBuffers;
+	std::vector<VkDeviceMemory> uniformBuffersMemory;
+	std::vector<void*> uniformBuffersMapped;
 
 	std::vector<VkCommandBuffer> commandBuffers;
 	std::vector<VkSemaphore> imageAvailableSemaphores;
@@ -675,15 +810,16 @@ struct VulkanCommon {
 			app,
 			physicalDevice.get(),
 			(*device)(),
-			(*surface)()
+			(*surface)(),
+			renderPass
 		);
-		initImageViews();
 		initRenderPass();
+		initDescriptorSetLayout();
 		initGraphicsPipeline();
-		initFramebuffers();
 		initCommandPool(physicalDevice.get());
 		initVertexBuffer();
-        initIndexBuffer();
+		initIndexBuffer();
+		initUniformBuffers();
 		initCommandBuffers();
 		initSyncObjects();
 	}
@@ -696,9 +832,16 @@ struct VulkanCommon {
 		if (graphicsPipeline) vkDestroyPipeline((*device)(), graphicsPipeline, nullptr);
 		if (pipelineLayout) vkDestroyPipelineLayout((*device)(), pipelineLayout, nullptr);
 		if (renderPass) vkDestroyRenderPass((*device)(), renderPass, nullptr);
-        
+
+		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+			vkDestroyBuffer((*device)(), uniformBuffers[i], nullptr);
+			vkFreeMemory((*device)(), uniformBuffersMemory[i], nullptr);
+		}
+
+		vkDestroyDescriptorSetLayout((*device)(), descriptorSetLayout, nullptr);
+
 		vkDestroyBuffer((*device)(), indexBuffer, nullptr);
-        vkFreeMemory((*device)(), indexBufferMemory, nullptr);
+		vkFreeMemory((*device)(), indexBufferMemory, nullptr);
 		
 		vkDestroyBuffer((*device)(), vertexBuffer, nullptr);
 		vkFreeMemory((*device)(), vertexBufferMemory, nullptr);
@@ -740,36 +883,27 @@ struct VulkanCommon {
 			app,
 			physicalDevice.get(),
 			(*device)(),
-			(*surface)()
+			(*surface)(),
+			renderPass
 		);
-		
-		initImageViews();
-		initFramebuffers();
 	}
 		
-	void initImageViews() {
-		swapChain->swapChainImageViews.resize(swapChain->swapChainImages.size());
+	void initDescriptorSetLayout() {
+		VkDescriptorSetLayoutBinding uboLayoutBinding{};
+		uboLayoutBinding.binding = 0;
+		uboLayoutBinding.descriptorCount = 1;
+		uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		uboLayoutBinding.pImmutableSamplers = nullptr;
+		uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 
-		for (size_t i = 0; i < swapChain->swapChainImages.size(); i++) {
-			VkImageViewCreateInfo createInfo = {};
-			createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-			createInfo.image = swapChain->swapChainImages[i];
-			createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-			createInfo.format = swapChain->swapChainImageFormat;
-			createInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
-			createInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
-			createInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
-			createInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
-			createInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-			createInfo.subresourceRange.baseMipLevel = 0;
-			createInfo.subresourceRange.levelCount = 1;
-			createInfo.subresourceRange.baseArrayLayer = 0;
-			createInfo.subresourceRange.layerCount = 1;
+		VkDescriptorSetLayoutCreateInfo layoutInfo{};
+		layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+		layoutInfo.bindingCount = 1;
+		layoutInfo.pBindings = &uboLayoutBinding;
 
-			VULKAN_SAFE(vkCreateImageView, (*device)(), &createInfo, nullptr, &swapChain->swapChainImageViews[i]);
-		}
+		VULKAN_SAFE(vkCreateDescriptorSetLayout, (*device)(), &layoutInfo, nullptr, &descriptorSetLayout);
 	}
-		
+
 	void initGraphicsPipeline() {
 		auto vertShaderCode = Common::File::read("shader-vert.spv");
 		auto fragShaderCode = Common::File::read("shader-frag.spv");
@@ -800,12 +934,12 @@ struct VulkanCommon {
 		VkPipelineVertexInputStateCreateInfo vertexInputInfo = {};
 		vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
 
-		auto bindingDescription = Vertex::getBindingDescription();
+		auto bindingDescriptions = Vertex::getBindingDescriptions();
+		vertexInputInfo.vertexBindingDescriptionCount = static_cast<uint32_t>(bindingDescriptions .size());
+		vertexInputInfo.pVertexBindingDescriptions = bindingDescriptions.data();
+		
 		auto attributeDescriptions = Vertex::getAttributeDescriptions();
-
-		vertexInputInfo.vertexBindingDescriptionCount = 1;
 		vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
-		vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
 		vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
 
 		VkPipelineInputAssemblyStateCreateInfo inputAssembly = {};
@@ -859,8 +993,8 @@ struct VulkanCommon {
 
 		VkPipelineLayoutCreateInfo pipelineLayoutInfo = {};
 		pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-		pipelineLayoutInfo.setLayoutCount = 0;
-		pipelineLayoutInfo.pushConstantRangeCount = 0;
+		pipelineLayoutInfo.setLayoutCount = 1;
+		pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout;
 
 		VULKAN_SAFE(vkCreatePipelineLayout, (*device)(), &pipelineLayoutInfo, nullptr, &pipelineLayout);
 
@@ -937,27 +1071,6 @@ struct VulkanCommon {
 		VULKAN_SAFE(vkCreateRenderPass, (*device)(), &renderPassInfo, nullptr, &renderPass);
 	}
 
-	void initFramebuffers() {
-		swapChain->swapChainFramebuffers.resize(swapChain->swapChainImageViews.size());
-
-		for (size_t i = 0; i < swapChain->swapChainImageViews.size(); i++) {
-			VkImageView attachments[] = {
-				swapChain->swapChainImageViews[i]
-			};
-
-			VkFramebufferCreateInfo framebufferInfo = {};
-			framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-			framebufferInfo.renderPass = renderPass;
-			framebufferInfo.attachmentCount = 1;
-			framebufferInfo.pAttachments = attachments;
-			framebufferInfo.width = swapChain->swapChainExtent.width;
-			framebufferInfo.height = swapChain->swapChainExtent.height;
-			framebufferInfo.layers = 1;
-
-			VULKAN_SAFE(vkCreateFramebuffer, (*device)(), &framebufferInfo, nullptr, &swapChain->swapChainFramebuffers[i]);
-		}
-	}
-
 	void initCommandPool(VulkanPhysicalDevice const * physicalDevice) {
 		auto queueFamilyIndices = VulkanPhysicalDevice::findQueueFamilies((*physicalDevice)(), (*surface)());
 
@@ -1003,33 +1116,47 @@ struct VulkanCommon {
 		vkFreeMemory((*device)(), stagingBufferMemory, nullptr);
 	}	   
 
-    void initIndexBuffer() {
-        VkDeviceSize bufferSize = sizeof(indices[0]) * indices.size();
+	void initIndexBuffer() {
+		VkDeviceSize bufferSize = sizeof(indices[0]) * indices.size();
 
-        VkBuffer stagingBuffer;
-        VkDeviceMemory stagingBufferMemory;
-        initBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
+		VkBuffer stagingBuffer;
+		VkDeviceMemory stagingBufferMemory;
+		initBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
 
-        void * data = {};
-        vkMapMemory(
+		void * data = {};
+		vkMapMemory(
 			(*device)(),
 			stagingBufferMemory,
 			0,
 			bufferSize,
 			0,
 			&data);
-            memcpy(data, indices.data(),
+			memcpy(data, indices.data(),
 			(size_t)bufferSize
 		);
-        vkUnmapMemory((*device)(), stagingBufferMemory);
+		vkUnmapMemory((*device)(), stagingBufferMemory);
 
-        initBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, indexBuffer, indexBufferMemory);
+		initBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, indexBuffer, indexBufferMemory);
 
-        copyBuffer(stagingBuffer, indexBuffer, bufferSize);
+		copyBuffer(stagingBuffer, indexBuffer, bufferSize);
 
-        vkDestroyBuffer((*device)(), stagingBuffer, nullptr);
-        vkFreeMemory((*device)(), stagingBufferMemory, nullptr);
-    }
+		vkDestroyBuffer((*device)(), stagingBuffer, nullptr);
+		vkFreeMemory((*device)(), stagingBufferMemory, nullptr);
+	}
+
+	void initUniformBuffers() {
+		VkDeviceSize bufferSize = sizeof(UniformBufferObject);
+
+		uniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+		uniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
+		uniformBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
+
+		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+			initBuffer(bufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, uniformBuffers[i], uniformBuffersMemory[i]);
+			
+			vkMapMemory((*device)(), uniformBuffersMemory[i], 0, bufferSize, 0, &uniformBuffersMapped[i]);
+		}
+	}
 
 	void initBuffer(
 		VkDeviceSize size,
@@ -1158,9 +1285,9 @@ struct VulkanCommon {
 			VkDeviceSize offsets[] = {0};
 			vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
 
-            vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT16);
+			vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT16);
 
-            vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
+			vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
 		}
 
 		vkCmdEndRenderPass(commandBuffer);
@@ -1187,6 +1314,34 @@ struct VulkanCommon {
 		}
 	}
 
+	void updateUniformBuffer(uint32_t currentImage) {
+		static auto startTime = std::chrono::high_resolution_clock::now();
+
+		auto currentTime = std::chrono::high_resolution_clock::now();
+		float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
+
+		UniformBufferObject ubo = {};
+		ubo.model = Tensor::rotate<float>(
+			Tensor::_ident<float,4>(),
+			time * degToRad<float>(90),
+			Tensor::float3(0, 0, 1)
+		);
+		ubo.view = Tensor::lookAt<float>(
+			Tensor::float3(2, 2, 2),
+			Tensor::float3(0, 0, 0),
+			Tensor::float3(0, 0, 1)
+		);
+		ubo.proj = Tensor::perspective<float>(
+			degToRad<float>(45),
+			(float)swapChain->swapChainExtent.width / (float)swapChain->swapChainExtent.height,
+			0.1f,
+			10
+		);
+		ubo.proj[1][1] *= -1;
+
+		memcpy(uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
+	}
+
 	void drawFrame() {
 		vkWaitForFences((*device)(), 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
 
@@ -1198,6 +1353,8 @@ struct VulkanCommon {
 		} else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
 			throw Common::Exception() << "vkAcquireNextImageKHR failed: " << result;
 		}
+		
+		updateUniformBuffer(currentFrame);
 
 		vkResetFences((*device)(), 1, &inFlightFences[currentFrame]);
 
