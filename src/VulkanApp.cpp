@@ -1149,7 +1149,6 @@ public:
 
 		vkBindBufferMemory(device, handle, memory, 0);
 	}
-
 protected:
 	static uint32_t findMemoryType(
 		VulkanPhysicalDevice const * const physicalDevice,
@@ -1167,6 +1166,98 @@ protected:
 
 		throw Common::Exception() << ("failed to find suitable memory type!");
 	}
+
+public:
+	static std::unique_ptr<VulkanDeviceMemoryBuffer> makeFromStaged(
+		VulkanPhysicalDevice const * const physicalDevice,
+		VulkanLogicalDevice * const device,
+		VulkanCommandPool const * const commandPool,
+		void const * const srcData,
+		size_t bufferSize
+	) {
+		VulkanDeviceMemoryBuffer stagingBuffer(
+			physicalDevice,
+			(*device)(),
+			bufferSize,
+			VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+		);
+
+		void * dstData = {};
+		vkMapMemory(
+			(*device)(),
+			stagingBuffer.getMemory(),
+			0,
+			bufferSize,
+			0,
+			&dstData
+		);
+		memcpy(dstData, srcData, (size_t)bufferSize);
+		vkUnmapMemory((*device)(), stagingBuffer.getMemory());
+
+		auto buffer = std::make_unique<VulkanDeviceMemoryBuffer>(
+			physicalDevice,
+			(*device)(),
+			bufferSize,
+			VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+		);
+		
+		copyBuffer(
+			device,
+			commandPool,
+			stagingBuffer(),
+			(*buffer)(),
+			bufferSize
+		);
+	
+		return buffer;
+	}
+
+protected:
+	//copies based on the graphicsQueue
+	static void copyBuffer(
+		VulkanLogicalDevice * const device,
+		VulkanCommandPool const * const commandPool,
+		VkBuffer srcBuffer,
+		VkBuffer dstBuffer,
+		VkDeviceSize size
+	) {
+		VkCommandBufferAllocateInfo allocInfo = {};
+		allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+		allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+		allocInfo.commandPool = (*commandPool)();
+		allocInfo.commandBufferCount = 1;
+
+		VkCommandBuffer commandBuffer;
+		vkAllocateCommandBuffers((*device)(), &allocInfo, &commandBuffer);
+
+		VkCommandBufferBeginInfo beginInfo = {};
+		beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+		beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+		vkBeginCommandBuffer(commandBuffer, &beginInfo);
+
+		{
+			VkBufferCopy copyRegion = {};
+			copyRegion.size = size;
+			vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, &copyRegion);
+		}
+
+		vkEndCommandBuffer(commandBuffer);
+
+		VkSubmitInfo submitInfo = {};
+		submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+		submitInfo.commandBufferCount = 1;
+		submitInfo.pCommandBuffers = &commandBuffer;
+
+		vkQueueSubmit(device->graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+		vkQueueWaitIdle(device->graphicsQueue);
+
+		vkFreeCommandBuffers((*device)(), (*commandPool)(), 1, &commandBuffer);
+	}
+
+
 };
 
 // so I don't have to prefix all my fields and names
@@ -1189,8 +1280,9 @@ struct VulkanCommon {
 	
 	std::unique_ptr<VulkanDeviceMemoryBuffer> vertexBuffer;
 	std::unique_ptr<VulkanDeviceMemoryBuffer> indexBuffer;
+
+	// hmm should the map be a field?
 	std::vector<std::unique_ptr<VulkanDeviceMemoryBuffer>> uniformBuffers;
-	
 	std::vector<void*> uniformBuffersMapped;
 
 	std::vector<VkCommandBuffer> commandBuffers;
@@ -1281,7 +1373,6 @@ struct VulkanCommon {
 		graphicsPipeline = nullptr;
 
 		uniformBuffers.clear();
-
 		indexBuffer = nullptr;
 		vertexBuffer = nullptr;
 
@@ -1326,70 +1417,23 @@ struct VulkanCommon {
 	}
 
 	void initVertexBuffer() {
-		VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
-
-		VulkanDeviceMemoryBuffer stagingBuffer(
+		vertexBuffer = VulkanDeviceMemoryBuffer::makeFromStaged(
 			physicalDevice.get(),
-			(*device)(),
-			bufferSize,
-			VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+			device.get(),
+			commandPool.get(),
+			vertices.data(),
+			sizeof(vertices[0]) * vertices.size()
 		);
-
-		void * data = {};
-		vkMapMemory(
-			(*device)(),
-			stagingBuffer.getMemory(),
-			0,
-			bufferSize,
-			0,
-			&data
-		);
-		memcpy(data, vertices.data(), (size_t)bufferSize);
-		vkUnmapMemory((*device)(), stagingBuffer.getMemory());
-
-		vertexBuffer = std::make_unique<VulkanDeviceMemoryBuffer>(
-			physicalDevice.get(),
-			(*device)(),
-			bufferSize,
-			VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
-		);
-		
-		copyBuffer(stagingBuffer(), (*vertexBuffer)(), bufferSize);
 	}
 
 	void initIndexBuffer() {
-		VkDeviceSize bufferSize = sizeof(indices[0]) * indices.size();
-
-		VulkanDeviceMemoryBuffer stagingBuffer(
+		indexBuffer = VulkanDeviceMemoryBuffer::makeFromStaged(
 			physicalDevice.get(),
-			(*device)(),
-			bufferSize,
-			VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+			device.get(),
+			commandPool.get(),
+			indices.data(),
+			sizeof(indices[0]) * indices.size()
 		);
-
-		void * data = {};
-		vkMapMemory(
-			(*device)(),
-			stagingBuffer.getMemory(),
-			0,
-			bufferSize,
-			0,
-			&data
-		);
-		memcpy(data, indices.data(), (size_t)bufferSize);
-		vkUnmapMemory((*device)(), stagingBuffer.getMemory());
-
-		indexBuffer = std::make_unique<VulkanDeviceMemoryBuffer>(
-			physicalDevice.get(),
-			(*device)(),
-			bufferSize,
-			VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
-		);
-		copyBuffer(stagingBuffer(), (*indexBuffer)(), bufferSize);
 	}
 
 	void initUniformBuffers() {
@@ -1416,41 +1460,6 @@ struct VulkanCommon {
 				&uniformBuffersMapped[i]
 			);
 		}
-	}
-
-	void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size) {
-		VkCommandBufferAllocateInfo allocInfo = {};
-		allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-		allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-		allocInfo.commandPool = (*commandPool)();
-		allocInfo.commandBufferCount = 1;
-
-		VkCommandBuffer commandBuffer;
-		vkAllocateCommandBuffers((*device)(), &allocInfo, &commandBuffer);
-
-		VkCommandBufferBeginInfo beginInfo = {};
-		beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-		beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-
-		vkBeginCommandBuffer(commandBuffer, &beginInfo);
-
-		{
-			VkBufferCopy copyRegion = {};
-			copyRegion.size = size;
-			vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, &copyRegion);
-		}
-
-		vkEndCommandBuffer(commandBuffer);
-
-		VkSubmitInfo submitInfo = {};
-		submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-		submitInfo.commandBufferCount = 1;
-		submitInfo.pCommandBuffers = &commandBuffer;
-
-		vkQueueSubmit(device->graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
-		vkQueueWaitIdle(device->graphicsQueue);
-
-		vkFreeCommandBuffers((*device)(), (*commandPool)(), 1, &commandBuffer);
 	}
 
 	void initCommandBuffers() {
