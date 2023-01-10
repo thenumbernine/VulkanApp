@@ -65,15 +65,25 @@ auto vulkanEnum(
 		std::vector<T> result;
 		f(std::forward<Args>(args)..., &count, nullptr);
 		result.resize(count);
-		f(std::forward<Args>(args)..., &count, result.data());
+		if (count) {
+			f(std::forward<Args>(args)..., &count, result.data());
+		}
 		return result;
-	} else {
+	} else if constexpr (std::is_same_v<
+		typename Common::FunctionPointer<F>::Return,
+		VkResult
+	>) {
 		uint32_t count = {};
 		std::vector<T> result;
 		vulkanSafe(what, f, std::forward<Args>(args)..., &count, nullptr);
 		result.resize(count);
-		vulkanSafe(what, f, std::forward<Args>(args)..., &count, result.data());
+		if (count) {
+			vulkanSafe(what, f, std::forward<Args>(args)..., &count, result.data());
+		}
 		return result;
+	} else {
+		//static_assert(false, "I don't know how to handle this");
+		throw Common::Exception() << "I don't know how to handle this";
 	}
 }
 
@@ -221,6 +231,8 @@ public:
 			handle
 		);
 	}
+	
+	// ************** from here on down, app-specific **************  
 
 	// this does result in vkCreateInstance, 
 	//  but the way it gest there is very application-specific
@@ -393,7 +405,65 @@ public:
 		);
 	}
 
-	// ******* from here on down, app-specific ******* 
+	std::vector<VkExtensionProperties> getExtensionProperties(
+		char const * const layerName = nullptr
+	) const {
+		return vulkanEnum<VkExtensionProperties>(
+			NAME_PAIR(vkEnumerateDeviceExtensionProperties),
+			handle,
+			layerName
+		);
+	}
+
+	bool getSurfaceSupport(
+		uint32_t queueFamilyIndex,
+		VkSurfaceKHR surface
+	) const {
+		VkBool32 presentSupport = false;
+		VULKAN_SAFE(vkGetPhysicalDeviceSurfaceSupportKHR, handle, queueFamilyIndex, surface, &presentSupport);
+		return !!presentSupport;
+	}
+
+	//pass-by-value ok?
+	VkSurfaceCapabilitiesKHR getSurfaceCapabilities(
+		VkSurfaceKHR surface
+	) const {
+		VkSurfaceCapabilitiesKHR caps = {};
+		VULKAN_SAFE(vkGetPhysicalDeviceSurfaceCapabilitiesKHR, handle, surface, &caps);
+		return caps;
+	}
+
+	// this is halfway app-specific.  it was in the tut's organization but I'm 50/50 if it is good design
+
+public:
+	struct SwapChainSupportDetails {
+		VkSurfaceCapabilitiesKHR capabilities;
+		std::vector<VkSurfaceFormatKHR> formats;
+		std::vector<VkPresentModeKHR> presentModes;
+	};
+
+	SwapChainSupportDetails querySwapChainSupport(
+		VkSurfaceKHR surface
+	) const {
+		return SwapChainSupportDetails(
+			//capabilities
+			getSurfaceCapabilities(surface),
+			//formats
+			vulkanEnum<VkSurfaceFormatKHR>(
+				NAME_PAIR(vkGetPhysicalDeviceSurfaceFormatsKHR),
+				handle,
+				surface
+			),
+			//presentModes
+			vulkanEnum<VkPresentModeKHR>(
+				NAME_PAIR(vkGetPhysicalDeviceSurfacePresentModesKHR),
+				handle,
+				surface
+			)
+		);
+	}
+
+	// ************** from here on down, app-specific **************  
 
 	// used by the application for specific physical device querying (should be a subclass of the general VulkanPhysicalDevice)
 	VulkanPhysicalDevice(
@@ -403,8 +473,6 @@ public:
 	) {
 		std::cout << "devices:" << std::endl;
 		for (auto const & h : instance->getPhysicalDevices()) {
-			auto physDevObj = VulkanPhysicalDevice(h);
-
 			VkPhysicalDeviceProperties physDevProps;
 			vkGetPhysicalDeviceProperties(h, &physDevProps);
 			std::cout
@@ -413,7 +481,7 @@ public:
 				<< " type=" << physDevProps.deviceType
 				<< std::endl;
 
-			if (physDevObj.isDeviceSuitable(surface, deviceExtensions)) {
+			if (VulkanPhysicalDevice(h).isDeviceSuitable(surface, deviceExtensions)) {
 				handle = h;
 				break;
 			}
@@ -462,11 +530,7 @@ protected:
 		std::vector<char const *> const & deviceExtensions
 	) const {
 		std::set<std::string> requiredExtensions(deviceExtensions.begin(), deviceExtensions.end());
-		for (auto const & extension : vulkanEnum<VkExtensionProperties>(
-			NAME_PAIR(vkEnumerateDeviceExtensionProperties),
-			handle,
-			nullptr
-		)) {
+		for (auto const & extension : getExtensionProperties()) {
 			requiredExtensions.erase(extension.extensionName);
 		}
 		return requiredExtensions.empty();
@@ -489,67 +553,22 @@ public:
 		VkSurfaceKHR surface
 	) const {
 		QueueFamilyIndices indices;
-
 		auto queueFamilies = getQueueFamilyProperties();
-		
 		for (uint32_t i = 0; i < queueFamilies.size(); ++i) {
 			auto const & f = queueFamilies[i];
 			if (f.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
 				indices.graphicsFamily = i;
 			}
-	
-			VkBool32 presentSupport = false;
-			vkGetPhysicalDeviceSurfaceSupportKHR(handle, i, surface, &presentSupport);
-			if (presentSupport) {
+			if (getSurfaceSupport(i, surface)) {
 				indices.presentFamily = i;
 			}
-			
-			if (indices.isComplete()) return indices;
+			if (indices.isComplete()) {
+				return indices;
+			}
 		}
 
 		throw Common::Exception() << "couldn't find all indices";
 	}
-
-public:
-	struct SwapChainSupportDetails {
-		VkSurfaceCapabilitiesKHR capabilities;
-		std::vector<VkSurfaceFormatKHR> formats;
-		std::vector<VkPresentModeKHR> presentModes;
-	};
-
-	SwapChainSupportDetails querySwapChainSupport(
-		VkSurfaceKHR surface
-	) const {
-		SwapChainSupportDetails details;
-
-		vkGetPhysicalDeviceSurfaceCapabilitiesKHR(handle, surface, &details.capabilities);
-
-		uint32_t formatCount;
-		vkGetPhysicalDeviceSurfaceFormatsKHR(handle, surface, &formatCount, nullptr);
-
-		if (formatCount != 0) {
-			details.formats.resize(formatCount);
-			vkGetPhysicalDeviceSurfaceFormatsKHR(handle, surface, &formatCount, details.formats.data());
-		}
-
-		uint32_t presentModeCount;
-		vkGetPhysicalDeviceSurfacePresentModesKHR(handle, surface, &presentModeCount, nullptr);
-
-		if (presentModeCount != 0) {
-			details.presentModes.resize(presentModeCount);
-			vkGetPhysicalDeviceSurfacePresentModesKHR(handle, surface, &presentModeCount, details.presentModes.data());
-		}
-
-		return details;
-	}
-
-#if 0
-	std::vector<VkExtenionProperties> getExtensionProperties(
-		char const * layerName = nullptr
-	) {
-		
-	}
-#endif
 };
 
 // validationLayers matches in checkValidationLayerSupport and initLogicalDevice
@@ -559,17 +578,28 @@ std::vector<char const *> validationLayers = {
 
 struct VulkanLogicalDevice {
 protected:
-	VkDevice device = {};
+	VkDevice handle = {};
 public:
 	VkQueue graphicsQueue = {};
 	VkQueue presentQueue = {};
 
 public:
-	decltype(device) operator()() const { return device; }
+	decltype(handle) operator()() const { return handle; }
 	
 	~VulkanLogicalDevice() {
-		if (device) vkDestroyDevice(device, nullptr);
+		if (handle) vkDestroyDevice(handle, nullptr);
 	}
+	
+	VkQueue getQueue(
+		uint32_t queueFamilyIndex,
+		uint32_t queueIndex = 0
+	) const {
+		VkQueue result;
+		vkGetDeviceQueue(handle, queueFamilyIndex, queueIndex, &result);
+		return result;
+	}
+
+	// ************** from here on down, app-specific **************  
 	
 	VulkanLogicalDevice(
 		VkPhysicalDevice physicalDevice,
@@ -608,17 +638,17 @@ public:
 		} else {
 			createInfo.enabledLayerCount = 0;
 		}
-		VULKAN_SAFE(vkCreateDevice, physicalDevice, &createInfo, nullptr, &device);
+		VULKAN_SAFE(vkCreateDevice, physicalDevice, &createInfo, nullptr, &handle);
 	
-		vkGetDeviceQueue(device, indices.graphicsFamily.value(), 0, &graphicsQueue);
-		vkGetDeviceQueue(device, indices.presentFamily.value(), 0, &presentQueue);
+		graphicsQueue = getQueue(indices.graphicsFamily.value());
+		presentQueue = getQueue(indices.presentFamily.value());
 	}
 
+	// this is out of place.  seems it has more to do with the debug system.
 	static bool checkValidationLayerSupport() {
 		auto availableLayers = vulkanEnum<VkLayerProperties>(
 			NAME_PAIR(vkEnumerateInstanceLayerProperties)
 		);
-
 		for (char const * const layerName : validationLayers) {
 			bool layerFound = false;
 			for (auto const & layerProperties : availableLayers) {
@@ -627,12 +657,10 @@ public:
 					break;
 				}
 			}
-
 			if (!layerFound) {
 				return false;
 			}
 		}
-
 		return true;
 	}
 };
@@ -640,15 +668,17 @@ public:
 struct VulkanRenderPass {
 protected:
 	//owned
-	VkRenderPass renderPass = {};
+	VkRenderPass handle = {};
 	//held
 	VkDevice device = {};
 public:
-	decltype(renderPass) operator()() const { return renderPass; }
+	decltype(handle) operator()() const { return handle; }
 	
 	~VulkanRenderPass() {
-		if (renderPass) vkDestroyRenderPass(device, renderPass, nullptr);
+		if (handle) vkDestroyRenderPass(device, handle, nullptr);
 	}
+	
+	// ************** from here on down, app-specific **************  
 
 	VulkanRenderPass(
 		VkDevice device_,
@@ -690,19 +720,19 @@ public:
 		renderPassInfo.dependencyCount = 1;
 		renderPassInfo.pDependencies = &dependency;
 
-		VULKAN_SAFE(vkCreateRenderPass, device, &renderPassInfo, nullptr, &renderPass);
+		VULKAN_SAFE(vkCreateRenderPass, device, &renderPassInfo, nullptr, &handle);
 	}
 };
 
 struct VulkanSwapChain {
 protected:
-	VkSwapchainKHR swapChain = {};
+	VkSwapchainKHR handle = {};
 	std::unique_ptr<VulkanRenderPass> renderPass;
 public:
 	VkExtent2D extent;
 	
 	// I would combine these into one struct so they can be dtored together
-	// but it seems vulkan wants VkImages linear?
+	// but it seems vulkan wants VkImages linear for its getter?
 	std::vector<VkImage> images;
 	std::vector<VkImageView> imageViews;
 	std::vector<VkFramebuffer> framebuffers;
@@ -712,7 +742,7 @@ protected:
 	VkDevice device;
 
 public:
-	decltype(swapChain) operator()() const { return swapChain; }
+	decltype(handle) operator()() const { return handle; }
 	VkRenderPass getRenderPass() const { return (*renderPass)(); }
 
 	~VulkanSwapChain() {
@@ -723,8 +753,10 @@ public:
 		for (auto imageView : imageViews) {
 			vkDestroyImageView(device, imageView, nullptr);
 		}
-		if (swapChain) vkDestroySwapchainKHR(device, swapChain, nullptr);
+		if (handle) vkDestroySwapchainKHR(device, handle, nullptr);
 	}
+	
+	// ************** from here on down, app-specific **************  
 	
 	VulkanSwapChain(
 		::SDLApp::SDLApp const * const app,
@@ -738,15 +770,14 @@ public:
 		VkPresentModeKHR presentMode = chooseSwapPresentMode(swapChainSupport.presentModes);
 		extent = chooseSwapExtent(app, swapChainSupport.capabilities);
 
-		uint32_t imageCount = swapChainSupport.capabilities.minImageCount + 1;
-		if (swapChainSupport.capabilities.maxImageCount > 0 && imageCount > swapChainSupport.capabilities.maxImageCount) {
-			imageCount = swapChainSupport.capabilities.maxImageCount;
-		}
+		uint32_t imageCount = std::max(
+			swapChainSupport.capabilities.minImageCount + 1,
+			swapChainSupport.capabilities.maxImageCount
+		);
 
 		VkSwapchainCreateInfoKHR createInfo = {};
 		createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
 		createInfo.surface = surface;
-
 		createInfo.minImageCount = imageCount;
 		createInfo.imageFormat = surfaceFormat.format;
 		createInfo.imageColorSpace = surfaceFormat.colorSpace;
@@ -756,7 +787,6 @@ public:
 
 		auto indices = physicalDevice->findQueueFamilies(surface);
 		uint32_t queueFamilyIndices[] = {indices.graphicsFamily.value(), indices.presentFamily.value()};
-
 		if (indices.graphicsFamily != indices.presentFamily) {
 			createInfo.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
 			createInfo.queueFamilyIndexCount = 2;
@@ -769,13 +799,18 @@ public:
 		createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
 		createInfo.presentMode = presentMode;
 		createInfo.clipped = VK_TRUE;
+		VULKAN_SAFE(vkCreateSwapchainKHR, device, &createInfo, nullptr, &handle);
 
-		VULKAN_SAFE(vkCreateSwapchainKHR, device, &createInfo, nullptr, &swapChain);
-
-		vkGetSwapchainImagesKHR(device, swapChain, &imageCount, nullptr);
+		// how come this gets a new / dif value for imageCount ?
+#if 1
+		vkGetSwapchainImagesKHR(device, handle, &imageCount, nullptr);
 		images.resize(imageCount);
-		vkGetSwapchainImagesKHR(device, swapChain, &imageCount, images.data());
-	
+		vkGetSwapchainImagesKHR(device, handle, &imageCount, images.data());
+#else
+		images = vulkanEnum<VkImage>(NAME_PAIR(vkGetSwapchainImagesKHR), device, handle);
+		if (imageCount != images.size()) throw Common::Exception() << "images size mismatch";
+#endif
+
 		imageViews.resize(images.size());
 		for (size_t i = 0; i < images.size(); i++) {
 			VkImageViewCreateInfo createInfo = {};
