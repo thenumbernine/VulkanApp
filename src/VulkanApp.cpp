@@ -386,6 +386,15 @@ public:
 	: handle(handle_) 
 	{}
 
+	std::vector<VkQueueFamilyProperties> getQueueFamilyProperties() const {
+		return vulkanEnum<VkQueueFamilyProperties>(
+			NAME_PAIR(vkGetPhysicalDeviceQueueFamilyProperties),
+			handle
+		);
+	}
+
+	// ******* from here on down, app-specific ******* 
+
 	// used by the application for specific physical device querying (should be a subclass of the general VulkanPhysicalDevice)
 	VulkanPhysicalDevice(
 		VulkanInstance const * const instance,
@@ -481,10 +490,7 @@ public:
 	) const {
 		QueueFamilyIndices indices;
 
-		auto queueFamilies = vulkanEnum<VkQueueFamilyProperties>(
-			NAME_PAIR(vkGetPhysicalDeviceQueueFamilyProperties),
-			handle
-		);
+		auto queueFamilies = getQueueFamilyProperties();
 		
 		for (uint32_t i = 0; i < queueFamilies.size(); ++i) {
 			auto const & f = queueFamilies[i];
