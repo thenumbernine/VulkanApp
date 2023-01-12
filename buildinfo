@@ -4,6 +4,7 @@ depends:append{
 	'../SDLApp',
 	'../Tensor',
 	'../Common',
+	'../Image',
 }
 libs:insert'vulkan'
 
