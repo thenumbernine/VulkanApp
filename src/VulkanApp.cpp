@@ -201,8 +201,11 @@ std::vector<uint16_t> const indices = {
 	0, 1, 2, 2, 3, 0
 };
 
+// hmm is it worth it to pass the child in, so that Traits can access child members, and use them for its methods?
+// or at this point do I just leave the function calls in the child class?
 template<typename Handle, typename Child>
 struct VulkanTraits;
+
 
 // null allocator.  this is all compile-resolved, right?
 // it's not going to need extra space if I inherit from it right?
@@ -219,10 +222,11 @@ struct VulkanAllocator {
 };
 
 template<
-	typename Handle,
+	typename Handle_,
 	typename Allocator = VulkanNullAllocator
 >
 struct VulkanHandle : public Allocator {
+	using Handle = Handle_;
 protected:
 	Handle handle = {};
 public:
@@ -257,18 +261,6 @@ struct VulkanInstance : public VulkanHandle<VkInstance> {
 		::SDLApp::SDLApp const * const app,
 		bool const enableValidationLayers
 	) {
-		// VkApplicationInfo needs title:
-		auto title = app->getTitle();
-		
-		// vkCreateInstance needs appInfo
-		VkApplicationInfo appInfo = {};
-		appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-		appInfo.pApplicationName = title.c_str();
-		appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
-		appInfo.pEngineName = "No Engine";
-		appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-		appInfo.apiVersion = VK_API_VERSION_1_0;
-
 		// debug output
 
 		{
@@ -289,7 +281,19 @@ struct VulkanInstance : public VulkanHandle<VkInstance> {
 				std::cout << "\t" << layer.layerName << std::endl;
 			}
 		}
+
+		// VkApplicationInfo needs title:
+		auto title = app->getTitle();
 		
+		// vkCreateInstance needs appInfo
+		VkApplicationInfo appInfo = {};
+		appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+		appInfo.pApplicationName = title.c_str();
+		appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
+		appInfo.pEngineName = "No Engine";
+		appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
+		appInfo.apiVersion = VK_API_VERSION_1_0;
+
 		// vkCreateInstance needs layerNames
 		std::vector<char const *> layerNames;
 		if (enableValidationLayers) {
@@ -334,10 +338,9 @@ protected:
 	}
 };
 
-struct VulkanDebugMessenger {
+struct VulkanDebugMessenger : public VulkanHandle<VkDebugUtilsMessengerEXT> {
 protected:
-	VkDebugUtilsMessengerEXT handle = {};
-	VulkanInstance const * const instance = {};	//from VulkanCommon, needs to be accessed for dtor to work
+	VulkanInstance const * const instance = {};	//needed for getProcAddr and for handle in dtor
 	
 	PFN_vkCreateDebugUtilsMessengerEXT vkCreateDebugUtilsMessengerEXT = {};
 	PFN_vkDestroyDebugUtilsMessengerEXT vkDestroyDebugUtilsMessengerEXT = {};
@@ -351,7 +354,7 @@ public:
 	~VulkanDebugMessenger() {
 		// call destroy function
 		if (vkDestroyDebugUtilsMessengerEXT && handle) {
-			vkDestroyDebugUtilsMessengerEXT((*instance)(), handle, nullptr);
+			vkDestroyDebugUtilsMessengerEXT((*instance)(), handle, getAllocator());
 		}
 	}
 
@@ -387,7 +390,7 @@ protected:
 
 struct VulkanSurface : public VulkanHandle<VkSurfaceKHR> {
 protected:
-	VkInstance instance;	//from VulkanCommon, needs to be held for dtor to work
+	VkInstance instance = {};	//from VulkanCommon, needs to be held for dtor to work
 public:
 	~VulkanSurface() {
 		if (handle) vkDestroySurfaceKHR(instance, handle, getAllocator());
@@ -403,22 +406,27 @@ public:
 };
 
 struct VulkanPhysicalDevice : public VulkanHandle<VkPhysicalDevice> {
-public:
 	VulkanPhysicalDevice(VkPhysicalDevice handle_)
 	: VulkanHandle<VkPhysicalDevice>(handle_) 
 	{}
-
-	std::vector<VkQueueFamilyProperties> getQueueFamilyProperties() const {
-		return vulkanEnum<VkQueueFamilyProperties>(
-			NAME_PAIR(vkGetPhysicalDeviceQueueFamilyProperties),
-			handle
-		);
-	}
 
 	VkPhysicalDeviceProperties getProperties() const {
 		VkPhysicalDeviceProperties physDevProps;
 		vkGetPhysicalDeviceProperties(handle, &physDevProps);
 		return physDevProps;
+	}
+
+	VkPhysicalDeviceMemoryProperties getMemoryProperties() const {
+		VkPhysicalDeviceMemoryProperties memProps = {};
+		vkGetPhysicalDeviceMemoryProperties(handle, &memProps);
+		return memProps;
+	}
+	
+	std::vector<VkQueueFamilyProperties> getQueueFamilyProperties() const {
+		return vulkanEnum<VkQueueFamilyProperties>(
+			NAME_PAIR(vkGetPhysicalDeviceQueueFamilyProperties),
+			handle
+		);
 	}
 
 	std::vector<VkExtensionProperties> getExtensionProperties(
@@ -482,7 +490,19 @@ public:
 
 	// this is halfway app-specific.  it was in the tut's organization but I'm 50/50 if it is good design
 
-public:
+	uint32_t findMemoryType(
+		uint32_t typeFilter,
+		VkMemoryPropertyFlags props
+	) const {
+		VkPhysicalDeviceMemoryProperties memProps = getMemoryProperties();
+		for (uint32_t i = 0; i < memProps.memoryTypeCount; i++) {
+			if ((typeFilter & (1 << i)) && (memProps.memoryTypes[i].propertyFlags & props) == props) {
+				return i;
+			}
+		}
+		throw Common::Exception() << ("failed to find suitable memory type!");
+	}
+
 	struct SwapChainSupportDetails {
 		VkSurfaceCapabilitiesKHR capabilities;
 		std::vector<VkSurfaceFormatKHR> formats;
@@ -622,7 +642,7 @@ public:
 public:
 	
 	~VulkanLogicalDevice() {
-		if (handle) vkDestroyDevice(handle, nullptr);
+		if (handle) vkDestroyDevice(handle, getAllocator());
 	}
 	
 	VkQueue getQueue(
@@ -723,7 +743,7 @@ protected:
 	VkDevice device = {};
 public:
 	~VulkanRenderPass() {
-		if (handle) vkDestroyRenderPass(device, handle, nullptr);
+		if (handle) vkDestroyRenderPass(device, handle, getAllocator());
 	}
 	
 	// ************** from here on down, app-specific **************  
@@ -791,13 +811,13 @@ public:
 
 	~VulkanSwapChain() {
 		for (auto framebuffer : framebuffers) {
-			vkDestroyFramebuffer(device, framebuffer, nullptr);
+			vkDestroyFramebuffer(device, framebuffer, getAllocator());
 		}
 		renderPass = nullptr;
 		for (auto imageView : imageViews) {
-			vkDestroyImageView(device, imageView, nullptr);
+			vkDestroyImageView(device, imageView, getAllocator());
 		}
-		if (handle) vkDestroySwapchainKHR(device, handle, nullptr);
+		if (handle) vkDestroySwapchainKHR(device, handle, getAllocator());
 	}
 
 	// should this be a 'devices' or a 'swapchain' method?
@@ -938,7 +958,7 @@ protected:
 public:
 	~VulkanDescriptorSetLayout() {
 		if (handle) {
-			vkDestroyDescriptorSetLayout(device, handle, nullptr);
+			vkDestroyDescriptorSetLayout(device, handle, getAllocator());
 		}
 	}
 	
@@ -967,7 +987,7 @@ protected:
 	VkDevice device = {};
 public:
 	~VulkanShaderModule() {
-		if (handle) vkDestroyShaderModule(device, handle, nullptr);
+		if (handle) vkDestroyShaderModule(device, handle, getAllocator());
 	}
 	
 	VulkanShaderModule(
@@ -997,8 +1017,8 @@ public:
 	VulkanDescriptorSetLayout const * getDescriptorSetLayout() const { return descriptorSetLayout.get(); }
 
 	~VulkanGraphicsPipeline() {
-		if (pipelineLayout) vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
-		if (handle) vkDestroyPipeline(device, handle, nullptr);
+		if (pipelineLayout) vkDestroyPipelineLayout(device, pipelineLayout, getAllocator());
+		if (handle) vkDestroyPipeline(device, handle, getAllocator());
 		descriptorSetLayout = nullptr;
 	}
 
@@ -1136,7 +1156,7 @@ protected:
 	VkDevice device = {};
 public:
 	~VulkanCommandPool() {
-		if (handle) vkDestroyCommandPool(device, handle, nullptr);
+		if (handle) vkDestroyCommandPool(device, handle, getAllocator());
 	}
 	VulkanCommandPool(
 		VulkanPhysicalDevice const * const physicalDevice,
@@ -1152,31 +1172,25 @@ public:
 	}
 };
 
-//generic form of VkBuffer / VkImage
+// methods common to VkBuffer and VkImage
 template<typename Handle, auto Destroy>
-struct VulkanDeviceMemoryGeneric : public VulkanHandle<Handle> {
+struct VulkanDeviceMemoryParent : public VulkanHandle<Handle> {
+	using Super = VulkanHandle<Handle>;
 protected:
 	//owns
 	VkDeviceMemory memory = {};
 	//holds
 	VulkanLogicalDevice const * device = {};
 public:
-	VkDeviceMemory getMemory() const { return memory; }
+	auto const & getMemory() const { return memory; }
+	auto & getMemory() { return memory; }
 
-	~VulkanDeviceMemoryGeneric() {
-		if ((*this)()) Destroy((*device)(), (*this)(), nullptr);
+	~VulkanDeviceMemoryParent() {
 		if (memory) vkFreeMemory((*device)(), memory, nullptr);
+		if (Super::handle) Destroy((*device)(), Super::handle, nullptr);
 	}
 
-	//only call this after handle is filled
-	VkMemoryRequirements getMemoryRequirements() const {
-		VkMemoryRequirements memRequirements = {};
-		vkGetBufferMemoryRequirements((*device)(), (*this)(), &memRequirements);
-		return memRequirements;
-	}
-
-	// ctor for everyone I guess
-	VulkanDeviceMemoryGeneric(
+	VulkanDeviceMemoryParent(
 		Handle handle_,
 		VkDeviceMemory memory_,
 		VulkanLogicalDevice const * const device_
@@ -1185,14 +1199,28 @@ public:
 		device(device_)
 	{}
 
+	//only call this after handle is filled
+	// is this a 'device' method or a 'buffer' method?
+	VkMemoryRequirements getMemoryRequirements() const {
+		VkMemoryRequirements memRequirements = {};
+		vkGetBufferMemoryRequirements((*device)(), Super::handle, &memRequirements);
+		return memRequirements;
+	}
+};
+
+struct VulkanDeviceMemoryBuffer : public VulkanDeviceMemoryParent<VkBuffer, vkDestroyBuffer> {
+	using Super = VulkanDeviceMemoryParent<VkBuffer, vkDestroyBuffer>;
+	
+	using Super::Super;
+
 	//ctor for VkBuffer's whether they are being ctor'd by staging or by uniforms whatever
-	VulkanDeviceMemoryGeneric(
+	VulkanDeviceMemoryBuffer(
 		VulkanPhysicalDevice const * const physicalDevice,
 		VulkanLogicalDevice const * const device_,
 		VkDeviceSize size,
 		VkBufferUsageFlags usage,
 		VkMemoryPropertyFlags properties
-	) : device(device_) {
+	) : Super({}, {}, device_) {
 		
 		VkBufferCreateInfo bufferInfo = {};
 		bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -1201,43 +1229,24 @@ public:
 		bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 		VulkanHandle<Handle>::handle = device_->createBuffer(&bufferInfo);
 
-		VkMemoryRequirements memRequirements = getMemoryRequirements();
+		VkMemoryRequirements memRequirements = Super::getMemoryRequirements();
 		VkMemoryAllocateInfo allocInfo = {};
 		allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
 		allocInfo.allocationSize = memRequirements.size;
-		allocInfo.memoryTypeIndex = findMemoryType(physicalDevice, memRequirements.memoryTypeBits, properties);
-		VULKAN_SAFE(vkAllocateMemory, (*device)(), &allocInfo, nullptr, &memory);
+		allocInfo.memoryTypeIndex = physicalDevice->findMemoryType(memRequirements.memoryTypeBits, properties);
+		VULKAN_SAFE(vkAllocateMemory, (*Super::device)(), &allocInfo, nullptr, &Super::getMemory());
 
-		vkBindBufferMemory((*device)(), (*this)(), memory, 0);
+		vkBindBufferMemory((*Super::device)(), (*this)(), Super::memory, 0);
 	}
 
-protected:
-	static uint32_t findMemoryType(
-		VulkanPhysicalDevice const * const physicalDevice,
-		uint32_t typeFilter,
-		VkMemoryPropertyFlags properties
-	) {
-		VkPhysicalDeviceMemoryProperties memProperties;
-		vkGetPhysicalDeviceMemoryProperties((*physicalDevice)(), &memProperties);
-
-		for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
-			if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
-				return i;
-			}
-		}
-
-		throw Common::Exception() << ("failed to find suitable memory type!");
-	}
-
-protected:
-	// called by makeBufferFromStaged and makeTextureFromStaged
-	static std::unique_ptr<VulkanDeviceMemoryGeneric<VkBuffer, vkDestroyBuffer>> makeFromStagedGeneric(
+	// TODO make a StagingBuffer subclass? 
+	static std::unique_ptr<VulkanDeviceMemoryBuffer> makeFromStaged(
 		VulkanPhysicalDevice const * const physicalDevice,
 		VulkanLogicalDevice const * const device,
 		void const * const srcData,
 		size_t bufferSize
 	) {
-		auto stagingBuffer = std::make_unique<VulkanDeviceMemoryGeneric<VkBuffer, vkDestroyBuffer>>(
+		auto stagingBuffer = std::make_unique<VulkanDeviceMemoryBuffer>(
 			physicalDevice,
 			device,
 			bufferSize,
@@ -1262,23 +1271,21 @@ protected:
 
 public:
 	// requires Handle == VkBuffer
-	static std::unique_ptr<VulkanDeviceMemoryGeneric> makeBufferFromStaged(
+	static std::unique_ptr<VulkanDeviceMemoryBuffer> makeBufferFromStaged(
 		VulkanPhysicalDevice const * const physicalDevice,
 		VulkanLogicalDevice const * const device,
 		VulkanCommandPool const * const commandPool,
 		void const * const srcData,
 		size_t bufferSize
-	) 
-	requires std::is_same_v<Handle, VkBuffer>
-	{
-		std::unique_ptr<VulkanDeviceMemoryGeneric> stagingBuffer = makeFromStagedGeneric(
+	) {
+		std::unique_ptr<VulkanDeviceMemoryBuffer> stagingBuffer = makeFromStaged(
 			physicalDevice,
 			device,
 			srcData,
 			bufferSize
 		);
 
-		auto buffer = std::make_unique<VulkanDeviceMemoryGeneric>(
+		auto buffer = std::make_unique<VulkanDeviceMemoryBuffer>(
 			physicalDevice,
 			device,
 			bufferSize,
@@ -1306,9 +1313,7 @@ protected:
 		VkBuffer srcBuffer,	//staging VkBuffer
 		Handle dstBuffer,	//dest VkBuffer
 		VkDeviceSize size
-	) 
-	requires std::is_same_v<Handle, VkBuffer>
-	{
+	) {
 		VkCommandBufferAllocateInfo allocInfo = {};
 		allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
 		allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
@@ -1342,11 +1347,17 @@ protected:
 
 		vkFreeCommandBuffers((*device)(), (*commandPool)(), 1, &commandBuffer);
 	}
+};
 
+
+struct VulkanDeviceMemoryImage : public VulkanDeviceMemoryParent<VkImage, vkDestroyImage> {
+	using Super = VulkanDeviceMemoryParent<VkImage, vkDestroyImage>;
+	
+	using Super::Super;
 
 public:
 	// requires Handle == VkImage
-	static std::unique_ptr<VulkanDeviceMemoryGeneric>
+	static std::unique_ptr<VulkanDeviceMemoryImage>
 	makeTextureFromStaged(
 		VulkanPhysicalDevice const * const physicalDevice,
 		VulkanLogicalDevice const * const device,
@@ -1355,10 +1366,9 @@ public:
 		size_t bufferSize,
 		int texWidth,
 		int texHeight
-	) 
-	requires std::is_same_v<Handle, VkImage>
-	{
-		std::unique_ptr<VulkanDeviceMemoryGeneric<VkBuffer, vkDestroyBuffer>> stagingBuffer = makeFromStagedGeneric(
+	) {
+		std::unique_ptr<VulkanDeviceMemoryBuffer> stagingBuffer 
+		= VulkanDeviceMemoryBuffer::makeFromStaged(
 			physicalDevice,
 			device,
 			srcData,
@@ -1402,8 +1412,7 @@ public:
 	}
 
 protected:
-	static std::unique_ptr<VulkanDeviceMemoryGeneric>
-	createImage(
+	static std::unique_ptr<VulkanDeviceMemoryImage> createImage(
 		VulkanPhysicalDevice const * const physicalDevice,
 		VulkanLogicalDevice const * const device,
 		uint32_t width,
@@ -1412,9 +1421,7 @@ protected:
 		VkImageTiling tiling,
 		VkImageUsageFlags usage,
 		VkMemoryPropertyFlags properties
-	) 
-	requires std::is_same_v<Handle, VkImage>
-	{
+	) {
 		VkImage image = {};
 		VkDeviceMemory imageMemory = {};
 
@@ -1440,13 +1447,13 @@ protected:
 		VkMemoryAllocateInfo allocInfo{};
 		allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
 		allocInfo.allocationSize = memRequirements.size;
-		allocInfo.memoryTypeIndex = findMemoryType(physicalDevice, memRequirements.memoryTypeBits, properties);
+		allocInfo.memoryTypeIndex = physicalDevice->findMemoryType(memRequirements.memoryTypeBits, properties);
 
 		VULKAN_SAFE(vkAllocateMemory, (*device)(), &allocInfo, nullptr, &imageMemory);
 
 		vkBindImageMemory((*device)(), image, imageMemory, 0);
 		
-		return std::make_unique<VulkanDeviceMemoryGeneric>(image, imageMemory, device);
+		return std::make_unique<VulkanDeviceMemoryImage>(image, imageMemory, device);
 	}
 
 	void transitionImageLayout(
@@ -1454,10 +1461,8 @@ protected:
 		VkFormat format,
 		VkImageLayout oldLayout,
 		VkImageLayout newLayout
-	)
-	requires std::is_same_v<Handle, VkImage>
-	{
-		VkCommandBuffer commandBuffer = beginSingleTimeCommands(device, commandPool);
+	) {
+		VkCommandBuffer commandBuffer = beginSingleTimeCommands(Super::device, commandPool);
 
 		VkImageMemoryBarrier barrier{};
 		barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -1500,7 +1505,7 @@ protected:
 			1, &barrier
 		);
 
-		endSingleTimeCommands(device, commandPool, commandBuffer);
+		endSingleTimeCommands(Super::device, commandPool, commandBuffer);
 	}
 
 	static void copyBufferToImage(
@@ -1510,9 +1515,7 @@ protected:
 		VkImage image,
 		uint32_t width,
 		uint32_t height
-	)
-	requires std::is_same_v<Handle, VkImage>
-	{
+	) {
 		VkCommandBuffer commandBuffer = beginSingleTimeCommands(device, commandPool);
 
 		VkBufferImageCopy region{};
@@ -1575,8 +1578,6 @@ protected:
 		vkFreeCommandBuffers((*device)(), (*commandPool)(), 1, &commandBuffer);
 	}
 };
-using VulkanDeviceMemoryBuffer = VulkanDeviceMemoryGeneric<VkBuffer, vkDestroyBuffer>;
-using VulkanDeviceMemoryImage = VulkanDeviceMemoryGeneric<VkImage, vkDestroyImage>;
 
 // so I don't have to prefix all my fields and names
 struct VulkanCommon {
@@ -1730,10 +1731,24 @@ protected:
 		int texWidth = image->getSize().x;
 		int texHeight = image->getSize().y;
 		int texBPP = image->getBitsPerPixel() >> 3;
-		if (texBPP != 32) throw Common::Exception() << "expected 32bpp, got " << texBPP;
-		//TODO instead resample
-		char * srcData = &(*image)(0,0,0);	//is there a better way?
-		VkDeviceSize bufferSize = texWidth * texHeight * 4;
+		int desiredBPP = 4;
+		if (texBPP != desiredBPP) {
+			//resample
+			auto newimage = std::make_shared<Image::Image>(image->getSize(), nullptr, desiredBPP);
+			for (int i = 0; i < texWidth * texHeight; ++i) {
+				int j = 0;
+				for (; j < texBPP && j < desiredBPP; ++j) {
+					newimage->getData()[desiredBPP*i+j] = image->getData()[texBPP*i+j];
+				}
+				for (; j < desiredBPP; ++j) {
+					newimage->getData()[desiredBPP*i+j] = 255;
+				}
+			}
+			image = newimage;
+			texBPP = image->getBitsPerPixel() >> 3;
+		}
+		char * srcData = image->getData();
+		VkDeviceSize bufferSize = texWidth * texHeight * texBPP;
 		
 		textureImage = VulkanDeviceMemoryImage::makeTextureFromStaged(
 			physicalDevice.get(),
