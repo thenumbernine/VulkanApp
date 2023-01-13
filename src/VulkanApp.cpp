@@ -82,6 +82,12 @@ real degToRad(real x) {
 	return x * (real)(M_PI / 180.);
 }
 
+auto assertHandle(auto x, char const * where) {
+	if (!x) throw Common::Exception() << "returned an empty handle at " << where;
+	return x;
+}
+#define ASSERTHANDLE(x) assertHandle(x, FILE_AND_LINE)
+
 // TODO put this somewhere maybe
 
 namespace Tensor {
@@ -220,12 +226,14 @@ struct VulkanTraits;
 // or will it not add space if I only make the members static methods that use 'this' ?  same same?
 struct VulkanNullAllocator {
 	VkAllocationCallbacks * getAllocator() { return nullptr; }
+	VkAllocationCallbacks const * getAllocator() const { return nullptr; }
 };
 
 // custom allocator
 struct VulkanAllocator {
 	VkAllocationCallbacks * allocator = nullptr;
 	VkAllocationCallbacks * getAllocator() { return allocator; }
+	VkAllocationCallbacks const * getAllocator() const { return allocator; }
 };
 
 template<
@@ -237,7 +245,7 @@ struct VulkanHandle : public Allocator {
 protected:
 	Handle handle = {};
 public:
-	auto const & operator()() const { return handle; }
+	auto operator()() const { return ASSERTHANDLE(handle); }
 
 	VulkanHandle() {} 
 	VulkanHandle(Handle handle_) : handle(handle_) {} 
@@ -250,13 +258,13 @@ struct VulkanInstance : public VulkanHandle<VkInstance> {
 	}
 	
 	PFN_vkVoidFunction getProcAddr(char const * const name) const {
-		return vkGetInstanceProcAddr(handle, name);
+		return vkGetInstanceProcAddr((*this)(), name);
 	}
 
 	std::vector<VkPhysicalDevice> getPhysicalDevices() const {
 		return vulkanEnum<VkPhysicalDevice>(
 			NAME_PAIR(vkEnumeratePhysicalDevices),
-			handle
+			(*this)()
 		);
 	}
 	
@@ -319,7 +327,7 @@ struct VulkanInstance : public VulkanHandle<VkInstance> {
 		createInfo.ppEnabledLayerNames = layerNames.data();
 		createInfo.enabledExtensionCount = extensions.size();
 		createInfo.ppEnabledExtensionNames = extensions.data();
-		VULKAN_SAFE(vkCreateInstance, &createInfo, nullptr, &handle);
+		VULKAN_SAFE(vkCreateInstance, &createInfo, getAllocator(), &handle);
 	}
 protected:
 	std::vector<char const *> getRequiredExtensions(
@@ -328,7 +336,7 @@ protected:
 	) {
 		uint32_t extensionCount = {};
 		SDL_VULKAN_SAFE(SDL_Vulkan_GetInstanceExtensions, app->getWindow(), &extensionCount, nullptr);
-		std::vector<const char *> extensions(extensionCount);
+		std::vector<char const *> extensions(extensionCount);
 		SDL_VULKAN_SAFE(SDL_Vulkan_GetInstanceExtensions, app->getWindow(), &extensionCount, extensions.data());
 
 		//debugging:
@@ -360,8 +368,8 @@ protected:
 public:
 	~VulkanDebugMessenger() {
 		// call destroy function
-		if (vkDestroyDebugUtilsMessengerEXT && handle) {
-			vkDestroyDebugUtilsMessengerEXT((*instance)(), handle, getAllocator());
+		if (vkDestroyDebugUtilsMessengerEXT && (*this)()) {
+			vkDestroyDebugUtilsMessengerEXT((*instance)(), (*this)(), getAllocator());
 		}
 	}
 
@@ -384,7 +392,7 @@ public:
 		createInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
 		createInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
 		createInfo.pfnUserCallback = debugCallback;
-		VULKAN_SAFE(vkCreateDebugUtilsMessengerEXT, (*instance)(), &createInfo, nullptr, &handle);
+		VULKAN_SAFE(vkCreateDebugUtilsMessengerEXT, (*instance)(), &createInfo, getAllocator(), &handle);
 	}
 
 // app-specific callback
@@ -397,18 +405,18 @@ protected:
 
 struct VulkanSurface : public VulkanHandle<VkSurfaceKHR> {
 protected:
-	VkInstance instance = {};	//from VulkanCommon, needs to be held for dtor to work
+	VulkanInstance const * const instance = {};	//from VulkanCommon, needs to be held for dtor to work
 public:
 	~VulkanSurface() {
-		if (handle) vkDestroySurfaceKHR(instance, handle, getAllocator());
+		if (handle) vkDestroySurfaceKHR((*instance)(), handle, getAllocator());
 	}
 
 	VulkanSurface(
 		SDL_Window * const window,
-		VkInstance instance_
+		VulkanInstance const * const instance_
 	) : instance(instance_) {
 		// https://vulkan-tutorial.com/Drawing_a_triangle/Presentation/Window_surface
-		SDL_VULKAN_SAFE(SDL_Vulkan_CreateSurface, window, instance, &handle);
+		SDL_VULKAN_SAFE(SDL_Vulkan_CreateSurface, window, (*instance)(), &handle);
 	}
 };
 
@@ -418,21 +426,21 @@ struct VulkanPhysicalDevice : public VulkanHandle<VkPhysicalDevice> {
 	{}
 
 	VkPhysicalDeviceProperties getProperties() const {
-		VkPhysicalDeviceProperties physDevProps;
-		vkGetPhysicalDeviceProperties(handle, &physDevProps);
+		VkPhysicalDeviceProperties physDevProps = {};
+		vkGetPhysicalDeviceProperties((*this)(), &physDevProps);
 		return physDevProps;
 	}
 
 	VkPhysicalDeviceMemoryProperties getMemoryProperties() const {
 		VkPhysicalDeviceMemoryProperties memProps = {};
-		vkGetPhysicalDeviceMemoryProperties(handle, &memProps);
+		vkGetPhysicalDeviceMemoryProperties((*this)(), &memProps);
 		return memProps;
 	}
 	
 	std::vector<VkQueueFamilyProperties> getQueueFamilyProperties() const {
 		return vulkanEnum<VkQueueFamilyProperties>(
 			NAME_PAIR(vkGetPhysicalDeviceQueueFamilyProperties),
-			handle
+			(*this)()
 		);
 	}
 
@@ -441,7 +449,7 @@ struct VulkanPhysicalDevice : public VulkanHandle<VkPhysicalDevice> {
 	) const {
 		return vulkanEnum<VkExtensionProperties>(
 			NAME_PAIR(vkEnumerateDeviceExtensionProperties),
-			handle,
+			(*this)(),
 			layerName
 		);
 	}
@@ -451,7 +459,7 @@ struct VulkanPhysicalDevice : public VulkanHandle<VkPhysicalDevice> {
 		VkSurfaceKHR surface
 	) const {
 		VkBool32 presentSupport = VK_FALSE;
-		VULKAN_SAFE(vkGetPhysicalDeviceSurfaceSupportKHR, handle, queueFamilyIndex, surface, &presentSupport);
+		VULKAN_SAFE(vkGetPhysicalDeviceSurfaceSupportKHR, (*this)(), queueFamilyIndex, surface, &presentSupport);
 		return !!presentSupport;
 	}
 
@@ -462,7 +470,7 @@ struct VulkanPhysicalDevice : public VulkanHandle<VkPhysicalDevice> {
 		VkSurfaceKHR surface
 	) const {
 		VkSurfaceCapabilitiesKHR caps = {};
-		VULKAN_SAFE(vkGetPhysicalDeviceSurfaceCapabilitiesKHR, handle, surface, &caps);
+		VULKAN_SAFE(vkGetPhysicalDeviceSurfaceCapabilitiesKHR, (*this)(), surface, &caps);
 		return caps;
 	}
 
@@ -471,7 +479,7 @@ struct VulkanPhysicalDevice : public VulkanHandle<VkPhysicalDevice> {
 	) const {
 		return vulkanEnum<VkSurfaceFormatKHR>(
 			NAME_PAIR(vkGetPhysicalDeviceSurfaceFormatsKHR),
-			handle,
+			(*this)(),
 			surface
 		);
 	}
@@ -481,17 +489,23 @@ struct VulkanPhysicalDevice : public VulkanHandle<VkPhysicalDevice> {
 	) const {
 		return vulkanEnum<VkPresentModeKHR>(
 			NAME_PAIR(vkGetPhysicalDeviceSurfacePresentModesKHR),
-			handle,
+			(*this)(),
 			surface
 		);
 	}
 
+	VkPhysicalDeviceFeatures getFeatures() const {
+		VkPhysicalDeviceFeatures features = {};
+        vkGetPhysicalDeviceFeatures((*this)(), &features);
+		return features;
+	}
+
 	VkDevice createDevice(
 		VkDeviceCreateInfo const * const createInfo,
-		VkAllocationCallbacks const * const allocator = nullptr
+		VkAllocationCallbacks const * const allocator = nullptr//getAllocator()
 	) const {
 		VkDevice device = {};
-		VULKAN_SAFE(vkCreateDevice, handle, createInfo, allocator, &device);
+		VULKAN_SAFE(vkCreateDevice, (*this)(), createInfo, allocator, &device);
 		return device;
 	}
 
@@ -570,7 +584,7 @@ protected:
 
 		auto physDevProps = getProperties();
 		VkPhysicalDeviceFeatures deviceFeatures;
-		vkGetPhysicalDeviceFeatures(handle, &deviceFeatures);
+		vkGetPhysicalDeviceFeatures((*this)(), &deviceFeatures);
 		// TODO sort by score and pick the best
 		return physDevProps.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU
 			|| physDevProps.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU
@@ -588,13 +602,12 @@ protected:
 			swapChainAdequate = !swapChainSupport.formats.empty() && !swapChainSupport.presentModes.empty();
 		}
         
-		VkPhysicalDeviceFeatures supportedFeatures = {};
-        vkGetPhysicalDeviceFeatures(handle, &supportedFeatures);
+		VkPhysicalDeviceFeatures features = getFeatures();
 
 		return indices.isComplete()
 			&& extensionsSupported
 			&& swapChainAdequate
-			&& supportedFeatures.samplerAnisotropy;
+			&& features.samplerAnisotropy;
 	}
 
 	//used by isDeviceSuitable
@@ -612,7 +625,7 @@ public:
 	struct QueueFamilyIndices {
 		std::optional<uint32_t> graphicsFamily;
 		std::optional<uint32_t> presentFamily;
-		bool isComplete() {
+		bool isComplete() const {
 			return graphicsFamily.has_value()
 				&& presentFamily.has_value();
 		}
@@ -646,41 +659,50 @@ std::vector<char const *> validationLayers = {
 	"VK_LAYER_KHRONOS_validation"
 };
 
+struct VulkanQueue : public VulkanHandle<VkQueue> {
+	using Super = VulkanHandle<VkQueue>;
+	using Super::Super;
+
+	// queues have no destroy function ...
+};
+
 struct VulkanLogicalDevice : public VulkanHandle<VkDevice> {
+protected:
+	std::unique_ptr<VulkanQueue> graphicsQueue;
+	std::unique_ptr<VulkanQueue> presentQueue;
 public:
-	VkQueue graphicsQueue = {};
-	VkQueue presentQueue = {};
-public:
+	VulkanQueue const * getGraphicsQueue() const { return graphicsQueue.get(); }
+	VulkanQueue const * getPresentQueue() const { return presentQueue.get(); }
 	
 	~VulkanLogicalDevice() {
 		if (handle) vkDestroyDevice(handle, getAllocator());
 	}
-	
-	VkQueue getQueue(
+
+	// should this return a handle or an object?
+	// I'll return a handle like the create*** functions
+	VulkanQueue getQueue(
 		uint32_t queueFamilyIndex,
 		uint32_t queueIndex = 0
 	) const {
-		VkQueue result;
-		vkGetDeviceQueue(handle, queueFamilyIndex, queueIndex, &result);
+		VkQueue result = {};
+		// should this call the getter or should VulkanQueue's ctor?
+		vkGetDeviceQueue((*this)(), queueFamilyIndex, queueIndex, &result);
 		return result;
 	}
 	
-	void waitIdle() const {
-		VULKAN_SAFE(vkDeviceWaitIdle, handle);
-	}
-
 	// maybe there's no need for these 'create' functions 
 
 #define CREATE_CREATER(name, suffix)\
 	Vk##name##suffix create##name(\
 		Vk##name##CreateInfo##suffix const * const createInfo,\
-		VkAllocationCallbacks const * const allocator = nullptr\
+		VkAllocationCallbacks const * const allocator = nullptr/*getAllocator()*/\
 	) const {\
 		Vk##name##suffix result = {};\
-		VULKAN_SAFE(vkCreate##name##suffix, handle, createInfo, allocator, &result);\
+		VULKAN_SAFE(vkCreate##name##suffix, (*this)(), createInfo, allocator, &result);\
 		return result;\
 	}
 
+	// meanwhile all these return handles, not wrappers.
 CREATE_CREATER(Swapchain, KHR)
 CREATE_CREATER(RenderPass, )
 CREATE_CREATER(ImageView, )
@@ -695,22 +717,26 @@ CREATE_CREATER(Buffer, )
 		VkPipelineCache pipelineCache,
 		size_t numCreateInfo,
 		VkGraphicsPipelineCreateInfo const * const createInfo,
-		VkAllocationCallbacks const * const allocator = nullptr
+		VkAllocationCallbacks const * const allocator = nullptr//getAllocator()
 	) const {
 		VkPipeline result = {};
-		VULKAN_SAFE(vkCreateGraphicsPipelines, handle, pipelineCache, numCreateInfo, createInfo, allocator, &result);
+		VULKAN_SAFE(vkCreateGraphicsPipelines, (*this)(), pipelineCache, numCreateInfo, createInfo, allocator, &result);
 		return result;
+	}
+
+	void waitIdle() const {
+		VULKAN_SAFE(vkDeviceWaitIdle, (*this)());
 	}
 
 	// ************** from here on down, app-specific **************  
 	
 	VulkanLogicalDevice(
 		VulkanPhysicalDevice const * const physicalDevice,
-		VkSurfaceKHR surface,
+		VulkanSurface const * const surface,
 		std::vector<char const *> const & deviceExtensions,
 		bool enableValidationLayers
 	) {
-		auto indices = physicalDevice->findQueueFamilies(surface);
+		auto indices = physicalDevice->findQueueFamilies((*surface)());
 
 		float queuePriority = 1;
 		std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
@@ -744,18 +770,18 @@ CREATE_CREATER(Buffer, )
 		}
 		handle = physicalDevice->createDevice(&createInfo);
 	
-		graphicsQueue = getQueue(indices.graphicsFamily.value());
-		presentQueue = getQueue(indices.presentFamily.value());
+		graphicsQueue = std::make_unique<VulkanQueue>(getQueue(indices.graphicsFamily.value()));
+		presentQueue = std::make_unique<VulkanQueue>(getQueue(indices.presentFamily.value()));
 	}
 };
 
 struct VulkanRenderPass : public VulkanHandle<VkRenderPass> {
 protected:
 	//held
-	VkDevice device = {};
+	VulkanLogicalDevice const * const device = {};
 public:
 	~VulkanRenderPass() {
-		if (handle) vkDestroyRenderPass(device, handle, getAllocator());
+		if (handle) vkDestroyRenderPass((*device)(), handle, getAllocator());
 	}
 	
 	// ************** from here on down, app-specific **************  
@@ -763,7 +789,7 @@ public:
 	VulkanRenderPass(
 		VulkanLogicalDevice const * const device_,
 		VkFormat swapChainImageFormat
-	) : device((*device_)()) {
+	) : device(device_) {
 		VkAttachmentDescription colorAttachment = {};
 		colorAttachment.format = swapChainImageFormat;
 		colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -808,9 +834,9 @@ protected:
 	//owned
 	std::unique_ptr<VulkanRenderPass> renderPass;
 	// hold for this class lifespan
-	VkDevice device;
+	VulkanLogicalDevice const * const device = {};
 public:
-	VkExtent2D extent;
+	VkExtent2D extent = {};
 	
 	// I would combine these into one struct so they can be dtored together
 	// but it seems vulkan wants VkImages linear for its getter?
@@ -819,33 +845,35 @@ public:
 	std::vector<VkFramebuffer> framebuffers;
 
 public:
-	VkRenderPass getRenderPass() const { return (*renderPass)(); }
+	VulkanRenderPass const * const getRenderPass() const {
+		return renderPass.get();
+	}
 
 	~VulkanSwapChain() {
-		for (auto framebuffer : framebuffers) {
-			vkDestroyFramebuffer(device, framebuffer, getAllocator());
+		for (auto const & framebuffer : framebuffers) {
+			vkDestroyFramebuffer((*device)(), framebuffer, getAllocator());
 		}
 		renderPass = nullptr;
-		for (auto imageView : imageViews) {
-			vkDestroyImageView(device, imageView, getAllocator());
+		for (auto const & imageView : imageViews) {
+			vkDestroyImageView((*device)(), imageView, getAllocator());
 		}
-		if (handle) vkDestroySwapchainKHR(device, handle, getAllocator());
+		if (handle) vkDestroySwapchainKHR((*device)(), handle, getAllocator());
 	}
 
 	// should this be a 'devices' or a 'swapchain' method?
 	std::vector<VkImage> getImages() const {
-		return vulkanEnum<VkImage>(NAME_PAIR(vkGetSwapchainImagesKHR), device, handle);
+		return vulkanEnum<VkImage>(NAME_PAIR(vkGetSwapchainImagesKHR), (*device)(), (*this)());
 	}
 	
 	// ************** from here on down, app-specific **************  
 	
 	VulkanSwapChain(
 		Tensor::int2 screenSize,
-		VulkanPhysicalDevice * const physicalDevice,
+		VulkanPhysicalDevice const * const physicalDevice,
 		VulkanLogicalDevice const * const device_,
-		VkSurfaceKHR surface
-	) : device((*device_)()) {
-		auto swapChainSupport = physicalDevice->querySwapChainSupport(surface);
+		VulkanSurface const * const surface
+	) : device(device_) {
+		auto swapChainSupport = physicalDevice->querySwapChainSupport((*surface)());
 
 		VkSurfaceFormatKHR surfaceFormat = chooseSwapSurfaceFormat(swapChainSupport.formats);
 		VkPresentModeKHR presentMode = chooseSwapPresentMode(swapChainSupport.presentModes);
@@ -860,7 +888,7 @@ public:
 
 		VkSwapchainCreateInfoKHR createInfo = {};
 		createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
-		createInfo.surface = surface;
+		createInfo.surface = (*surface)();
 		createInfo.minImageCount = imageCount;
 		createInfo.imageFormat = surfaceFormat.format;
 		createInfo.imageColorSpace = surfaceFormat.colorSpace;
@@ -868,7 +896,7 @@ public:
 		createInfo.imageArrayLayers = 1;
 		createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
-		auto indices = physicalDevice->findQueueFamilies(surface);
+		auto indices = physicalDevice->findQueueFamilies((*surface)());
 		uint32_t queueFamilyIndices[] = {indices.graphicsFamily.value(), indices.presentFamily.value()};
 		if (indices.graphicsFamily != indices.presentFamily) {
 			createInfo.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
@@ -917,8 +945,7 @@ public:
         viewInfo.subresourceRange.baseArrayLayer = 0;
         viewInfo.subresourceRange.layerCount = 1;
         VkImageView imageView = {};
-        VULKAN_SAFE(vkCreateImageView, device, &viewInfo, nullptr, &imageView);
-
+        VULKAN_SAFE(vkCreateImageView, (*device)(), &viewInfo, getAllocator(), &imageView);
         return imageView;
 	}
 
@@ -969,17 +996,17 @@ protected:
 struct VulkanDescriptorSetLayout : public VulkanHandle<VkDescriptorSetLayout> {
 protected:
 	//held for dtor
-	VkDevice device = {};
+	VulkanLogicalDevice const * const device = {};
 public:
 	~VulkanDescriptorSetLayout() {
 		if (handle) {
-			vkDestroyDescriptorSetLayout(device, handle, getAllocator());
+			vkDestroyDescriptorSetLayout((*device)(), handle, getAllocator());
 		}
 	}
 	
 	VulkanDescriptorSetLayout(
 		VulkanLogicalDevice const * const device_
-	) : device((*device_)()) {
+	) : device(device_) {
 		VkDescriptorSetLayoutBinding uboLayoutBinding = {};
 		uboLayoutBinding.binding = 0;
 		uboLayoutBinding.descriptorCount = 1;
@@ -1007,16 +1034,16 @@ public:
 struct VulkanShaderModule : public VulkanHandle<VkShaderModule> {
 protected:
 	//held:
-	VkDevice device = {};
+	VulkanLogicalDevice const * const device = {};
 public:
 	~VulkanShaderModule() {
-		if (handle) vkDestroyShaderModule(device, handle, getAllocator());
+		if (handle) vkDestroyShaderModule((*device)(), handle, getAllocator());
 	}
 	
 	VulkanShaderModule(
 		VulkanLogicalDevice const * const device_,
 		std::string const code
-	) : device((*device_)()) {
+	) : device(device_) {
 		VkShaderModuleCreateInfo createInfo = {};
 		createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
 		createInfo.codeSize = code.length();
@@ -1032,23 +1059,27 @@ protected:
 	std::unique_ptr<VulkanDescriptorSetLayout> descriptorSetLayout;
 	
 	//held:
-	VkDevice device = {};				//held for dtor
+	VulkanLogicalDevice const * const device = {};				//held for dtor
 public:
-	VkPipelineLayout getPipelineLayout() const { return pipelineLayout; }
+	VkPipelineLayout getPipelineLayout() const { return ASSERTHANDLE(pipelineLayout); }
 	
 	VulkanDescriptorSetLayout * getDescriptorSetLayout() { return descriptorSetLayout.get(); }
 	VulkanDescriptorSetLayout const * getDescriptorSetLayout() const { return descriptorSetLayout.get(); }
 
 	~VulkanGraphicsPipeline() {
-		if (pipelineLayout) vkDestroyPipelineLayout(device, pipelineLayout, getAllocator());
-		if (handle) vkDestroyPipeline(device, handle, getAllocator());
+		if (pipelineLayout) vkDestroyPipelineLayout((*device)(), pipelineLayout, getAllocator());
+		if (handle) vkDestroyPipeline((*device)(), handle, getAllocator());
 		descriptorSetLayout = nullptr;
 	}
 
 	VulkanGraphicsPipeline(
 		VulkanLogicalDevice const * const device_,
-		VkRenderPass renderPass
-	) : device((*device_)()) {
+		VulkanRenderPass const * const renderPass
+	) : device(device_) {
+		
+		// descriptorSetLayout is only used by graphicsPipeline
+		descriptorSetLayout = std::make_unique<VulkanDescriptorSetLayout>(device_);
+
 		auto vertShaderModule = VulkanShaderModule(
 			device_,
 			Common::File::read("shader-vert.spv")
@@ -1133,20 +1164,13 @@ public:
 		dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
 		dynamicState.pDynamicStates = dynamicStates.data();
 		
-		// descriptorSetLayout is only used by graphicsPipeline
 		VkPipelineLayoutCreateInfo pipelineLayoutInfo = {};
 		pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-#if 1
-		descriptorSetLayout = std::make_unique<VulkanDescriptorSetLayout>(device_);
 		std::vector<VkDescriptorSetLayout> descriptorSetLayouts = {
 			(*descriptorSetLayout)(),
 		};
 		pipelineLayoutInfo.setLayoutCount = static_cast<uint32_t>(descriptorSetLayouts.size());
 		pipelineLayoutInfo.pSetLayouts = descriptorSetLayouts.data();
-#else
-		pipelineLayoutInfo.setLayoutCount = 1;
-		pipelineLayoutInfo.pSetLayouts = &(*descriptorSetLayout)();
-#endif
 		pipelineLayout = device_->createPipelineLayout(&pipelineLayoutInfo);
 
 		VkPipelineShaderStageCreateInfo shaderStages[] = {
@@ -1166,10 +1190,10 @@ public:
 		pipelineInfo.pColorBlendState = &colorBlending;
 		pipelineInfo.pDynamicState = &dynamicState;
 		pipelineInfo.layout = pipelineLayout;
-		pipelineInfo.renderPass = renderPass;
+		pipelineInfo.renderPass = (*renderPass)();
 		pipelineInfo.subpass = 0;
 		pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
-		handle = device_->createGraphicsPipelines((VkPipelineCache)VK_NULL_HANDLE, 1, &pipelineInfo, nullptr);
+		handle = device_->createGraphicsPipelines((VkPipelineCache)VK_NULL_HANDLE, 1, &pipelineInfo, getAllocator());
 	}
 };
 
@@ -1196,21 +1220,19 @@ public:
 };
 
 // methods common to VkBuffer and VkImage
-template<typename Handle, auto Destroy>
+template<typename Handle>
 struct VulkanDeviceMemoryParent : public VulkanHandle<Handle> {
 	using Super = VulkanHandle<Handle>;
-protected:
 	//owns
 	VkDeviceMemory memory = {};
 	//holds
 	VulkanLogicalDevice const * device = {};
 public:
-	auto const & getMemory() const { return memory; }
-	auto & getMemory() { return memory; }
+	auto getMemory() const { return ASSERTHANDLE(memory); }
 
 	~VulkanDeviceMemoryParent() {
-		if (memory) vkFreeMemory((*device)(), memory, nullptr);
-		if (Super::handle) Destroy((*device)(), Super::handle, nullptr);
+		if (memory) vkFreeMemory((*device)(), memory, Super::getAllocator());
+		//doesn't destroy handle -- that's for the child class to do
 	}
 
 	VulkanDeviceMemoryParent(
@@ -1226,15 +1248,18 @@ public:
 	// is this a 'device' method or a 'buffer' method?
 	VkMemoryRequirements getMemoryRequirements() const {
 		VkMemoryRequirements memRequirements = {};
-		vkGetBufferMemoryRequirements((*device)(), Super::handle, &memRequirements);
+		vkGetBufferMemoryRequirements((*device)(), (*this)(), &memRequirements);
 		return memRequirements;
 	}
 };
 
-struct VulkanDeviceMemoryBuffer : public VulkanDeviceMemoryParent<VkBuffer, vkDestroyBuffer> {
-	using Super = VulkanDeviceMemoryParent<VkBuffer, vkDestroyBuffer>;
-	
+struct VulkanDeviceMemoryBuffer : public VulkanDeviceMemoryParent<VkBuffer> {
+	using Super = VulkanDeviceMemoryParent<VkBuffer>;
 	using Super::Super;
+
+	~VulkanDeviceMemoryBuffer() {
+		if (Super::handle) vkDestroyBuffer((*device)(), Super::handle, getAllocator());
+	}
 
 	//ctor for VkBuffer's whether they are being ctor'd by staging or by uniforms whatever
 	VulkanDeviceMemoryBuffer(
@@ -1250,14 +1275,14 @@ struct VulkanDeviceMemoryBuffer : public VulkanDeviceMemoryParent<VkBuffer, vkDe
 		bufferInfo.size = size;
 		bufferInfo.usage = usage;
 		bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-		VulkanHandle<Handle>::handle = device_->createBuffer(&bufferInfo);
+		Super::handle = device_->createBuffer(&bufferInfo);
 
 		VkMemoryRequirements memRequirements = Super::getMemoryRequirements();
 		VkMemoryAllocateInfo allocInfo = {};
 		allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
 		allocInfo.allocationSize = memRequirements.size;
 		allocInfo.memoryTypeIndex = physicalDevice->findMemoryType(memRequirements.memoryTypeBits, properties);
-		VULKAN_SAFE(vkAllocateMemory, (*Super::device)(), &allocInfo, nullptr, &Super::getMemory());
+		VULKAN_SAFE(vkAllocateMemory, (*Super::device)(), &allocInfo, getAllocator(), &memory);
 
 		vkBindBufferMemory((*Super::device)(), (*this)(), Super::memory, 0);
 	}
@@ -1365,18 +1390,20 @@ protected:
 		submitInfo.commandBufferCount = 1;
 		submitInfo.pCommandBuffers = &commandBuffer;
 
-		vkQueueSubmit(device->graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
-		vkQueueWaitIdle(device->graphicsQueue);
+		vkQueueSubmit((*device->getGraphicsQueue())(), 1, &submitInfo, VK_NULL_HANDLE);
+		vkQueueWaitIdle((*device->getGraphicsQueue())());
 
 		vkFreeCommandBuffers((*device)(), (*commandPool)(), 1, &commandBuffer);
 	}
 };
 
-
-struct VulkanDeviceMemoryImage : public VulkanDeviceMemoryParent<VkImage, vkDestroyImage> {
-	using Super = VulkanDeviceMemoryParent<VkImage, vkDestroyImage>;
-	
+struct VulkanDeviceMemoryImage : public VulkanDeviceMemoryParent<VkImage> {
+	using Super = VulkanDeviceMemoryParent<VkImage>;
 	using Super::Super;
+
+	~VulkanDeviceMemoryImage() {
+		if (Super::handle) vkDestroyImage((*device)(), Super::handle, getAllocator());
+	}
 
 public:
 	// requires Handle == VkImage
@@ -1462,17 +1489,17 @@ protected:
 		imageInfo.usage = usage;
 		imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
 		imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-		VULKAN_SAFE(vkCreateImage, (*device)(), &imageInfo, nullptr, &image);
+		VULKAN_SAFE(vkCreateImage, (*device)(), &imageInfo, nullptr/*getAllocator()*/, &image);
 
 		VkMemoryRequirements memRequirements;
 		vkGetImageMemoryRequirements((*device)(), image, &memRequirements);
 
-		VkMemoryAllocateInfo allocInfo{};
+		VkMemoryAllocateInfo allocInfo = {};
 		allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
 		allocInfo.allocationSize = memRequirements.size;
 		allocInfo.memoryTypeIndex = physicalDevice->findMemoryType(memRequirements.memoryTypeBits, properties);
 
-		VULKAN_SAFE(vkAllocateMemory, (*device)(), &allocInfo, nullptr, &imageMemory);
+		VULKAN_SAFE(vkAllocateMemory, (*device)(), &allocInfo, nullptr/*getAllocator()*/, &imageMemory);
 
 		vkBindImageMemory((*device)(), image, imageMemory, 0);
 		
@@ -1487,7 +1514,7 @@ protected:
 	) {
 		VkCommandBuffer commandBuffer = beginSingleTimeCommands(Super::device, commandPool);
 
-		VkImageMemoryBarrier barrier{};
+		VkImageMemoryBarrier barrier = {};
 		barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
 		barrier.oldLayout = oldLayout;
 		barrier.newLayout = newLayout;
@@ -1541,7 +1568,7 @@ protected:
 	) {
 		VkCommandBuffer commandBuffer = beginSingleTimeCommands(device, commandPool);
 
-		VkBufferImageCopy region{};
+		VkBufferImageCopy region = {};
 		region.bufferOffset = 0;
 		region.bufferRowLength = 0;
 		region.bufferImageHeight = 0;
@@ -1565,7 +1592,7 @@ protected:
 		VulkanLogicalDevice const * const device,
 		VulkanCommandPool const * const commandPool
 	) {
-		VkCommandBufferAllocateInfo allocInfo{};
+		VkCommandBufferAllocateInfo allocInfo = {};
 		allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
 		allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
 		allocInfo.commandPool = (*commandPool)();
@@ -1574,7 +1601,7 @@ protected:
 		VkCommandBuffer commandBuffer;
 		vkAllocateCommandBuffers((*device)(), &allocInfo, &commandBuffer);
 
-		VkCommandBufferBeginInfo beginInfo{};
+		VkCommandBufferBeginInfo beginInfo = {};
 		beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 		beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
@@ -1590,13 +1617,13 @@ protected:
 	) {
 		vkEndCommandBuffer(commandBuffer);
 
-		VkSubmitInfo submitInfo{};
+		VkSubmitInfo submitInfo = {};
 		submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 		submitInfo.commandBufferCount = 1;
 		submitInfo.pCommandBuffers = &commandBuffer;
 
-		vkQueueSubmit(device->graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
-		vkQueueWaitIdle(device->graphicsQueue);
+		vkQueueSubmit((*device->getGraphicsQueue())(), 1, &submitInfo, VK_NULL_HANDLE);
+		vkQueueWaitIdle((*device->getGraphicsQueue())());
 
 		vkFreeCommandBuffers((*device)(), (*commandPool)(), 1, &commandBuffer);
 	}
@@ -1664,16 +1691,16 @@ struct VulkanCommon {
 			debug = std::make_unique<VulkanDebugMessenger>(instance.get());
 		}
 		
-		surface = std::make_unique<VulkanSurface>(app->getWindow(), (*instance)());
+		surface = std::make_unique<VulkanSurface>(app->getWindow(), instance.get());
 		
 		physicalDevice = std::make_unique<VulkanPhysicalDevice>(instance.get(), (*surface)(), deviceExtensions);
-		device = std::make_unique<VulkanLogicalDevice>(physicalDevice.get(), (*surface)(), deviceExtensions, enableValidationLayers);
+		device = std::make_unique<VulkanLogicalDevice>(physicalDevice.get(), surface.get(), deviceExtensions, enableValidationLayers);
 		
 		swapChain = std::make_unique<VulkanSwapChain>(
 			app->getScreenSize(),
 			physicalDevice.get(),
 			device.get(),
-			(*surface)()
+			surface.get()
 		);
 		
 		graphicsPipeline = std::make_unique<VulkanGraphicsPipeline>(
@@ -1799,7 +1826,7 @@ protected:
         VkPhysicalDeviceProperties properties = {};
         vkGetPhysicalDeviceProperties((*physicalDevice)(), &properties);
 
-        VkSamplerCreateInfo samplerInfo{};
+        VkSamplerCreateInfo samplerInfo = {};
         samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
         samplerInfo.magFilter = VK_FILTER_LINEAR;
         samplerInfo.minFilter = VK_FILTER_LINEAR;
@@ -1841,7 +1868,7 @@ protected:
 			app->getScreenSize(),
 			physicalDevice.get(),
 			device.get(),
-			(*surface)()
+			surface.get()
 		);
 	}
 
@@ -1909,7 +1936,7 @@ protected:
 
 		VkRenderPassBeginInfo renderPassInfo = {};
 		renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-		renderPassInfo.renderPass = swapChain->getRenderPass();
+		renderPassInfo.renderPass = (*swapChain->getRenderPass())();
 		renderPassInfo.framebuffer = swapChain->framebuffers[imageIndex];
 		renderPassInfo.renderArea.offset = {0, 0};
 		renderPassInfo.renderArea.extent = swapChain->extent;
@@ -1983,13 +2010,13 @@ protected:
 	}
 
 	void createDescriptorPool() {
-        std::array<VkDescriptorPoolSize, 2> poolSizes{};
+        std::array<VkDescriptorPoolSize, 2> poolSizes = {};
         poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         poolSizes[0].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
         poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         poolSizes[1].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
 
-		VkDescriptorPoolCreateInfo poolInfo{};
+		VkDescriptorPoolCreateInfo poolInfo = {};
 		poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
         poolInfo.pPoolSizes = poolSizes.data();
@@ -1999,7 +2026,7 @@ protected:
 
 	void createDescriptorSets() {
 		std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, (*graphicsPipeline->getDescriptorSetLayout())());
-		VkDescriptorSetAllocateInfo allocInfo{};
+		VkDescriptorSetAllocateInfo allocInfo = {};
 		allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
 		allocInfo.descriptorPool = descriptorPool;
 		allocInfo.descriptorSetCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
@@ -2013,12 +2040,12 @@ protected:
 			bufferInfo.offset = 0;
 			bufferInfo.range = sizeof(UniformBufferObject);
 
-            VkDescriptorImageInfo imageInfo{};
+            VkDescriptorImageInfo imageInfo = {};
             imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             imageInfo.imageView = textureImageView;
             imageInfo.sampler = textureSampler;
 
-            std::array<VkWriteDescriptorSet, 2> descriptorWrites{};
+            std::array<VkWriteDescriptorSet, 2> descriptorWrites = {};
 		
             descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             descriptorWrites[0].dstSet = descriptorSets[i];
@@ -2050,7 +2077,7 @@ protected:
 
 		UniformBufferObject ubo = {};
 		ubo.model = Tensor::rotate<float>(
-			Tensor::_ident<float,4>(),
+			Tensor::float4i4(1),
 			time * degToRad<float>(90),
 			Tensor::float3(0, 0, 1)
 		);
@@ -2066,6 +2093,11 @@ protected:
 			10
 		);
 		ubo.proj[1][1] *= -1;
+
+//TODO FIXME
+ubo.model = Tensor::float4i4(1); 
+ubo.view = Tensor::float4i4(1); 
+ubo.proj = Tensor::float4i4(1); 
 
 		memcpy(uniformBuffersMapped[currentFrame_], &ubo, sizeof(ubo));
 	}
@@ -2112,7 +2144,7 @@ public:
 		submitInfo.signalSemaphoreCount = 1;
 		submitInfo.pSignalSemaphores = signalSemaphores;
 
-		VULKAN_SAFE(vkQueueSubmit, device->graphicsQueue, 1, &submitInfo, inFlightFences[currentFrame]);
+		VULKAN_SAFE(vkQueueSubmit, (*device->getGraphicsQueue())(), 1, &submitInfo, inFlightFences[currentFrame]);
 
 		VkPresentInfoKHR presentInfo = {};
 		presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
@@ -2126,7 +2158,7 @@ public:
 
 		presentInfo.pImageIndices = &imageIndex;
 
-		result = vkQueuePresentKHR(device->presentQueue, &presentInfo);
+		result = vkQueuePresentKHR((*device->getPresentQueue())(), &presentInfo);
 		if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized) {
 			framebufferResized = false;
 			recreateSwapChain();
