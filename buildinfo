@@ -1,11 +1,16 @@
 distName='test'
 distType='app'
+--[=[ for compiling tut code
+libs:append{'stb', 'glfw'}
+--]=]
+-- [=[ noral deps
 depends:append{
 	'../SDLApp',
 	'../Tensor',
 	'../Common',
 	'../Image',
 }
+--]=]
 libs:insert'vulkan'
 
 local function exec(cmd)
