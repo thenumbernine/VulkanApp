@@ -5,6 +5,7 @@
 #include "Common/File.h"
 #include "Common/Function.h"
 #include "Tensor/Tensor.h"
+#include <tiny_obj_loader.h>
 #include <SDL_vulkan.h>
 #include <vulkan/vulkan.hpp>
 #include <iostream>	//debugging only
@@ -213,7 +214,33 @@ struct Vertex {
 			}
 		);
 	}
+
+    bool operator==(Vertex const & o) const {
+        return pos == o.pos && color == o.color && texCoord == o.texCoord;
+    }
 };
+
+namespace std {
+
+template<int dim>
+struct hash<Tensor::floatN<dim>> {
+	size_t operator()(Tensor::floatN<dim> const & v) const {
+		uint32_t h = {};
+		for (auto x : v) {
+			h ^= hash<uint32_t>()(*(uint32_t const *)&x); 
+		}
+		return h;
+	}
+};
+
+template<>
+struct hash<Vertex> {
+	size_t operator()(Vertex const & v) const {
+		return ((hash<Tensor::float3>()(v.pos) ^ (hash<Tensor::float3>()(v.color) << 1)) >> 1) ^ (hash<Tensor::float2>()(v.texCoord) << 1);
+	}
+};
+
+}
 
 struct UniformBufferObject {
 	alignas(16) Tensor::float4x4 model;
@@ -221,23 +248,6 @@ struct UniformBufferObject {
 	alignas(16) Tensor::float4x4 proj;
 };
 static_assert(sizeof(UniformBufferObject) == 4 * 4 * sizeof(float) * 3);
-
-std::vector<Vertex> const vertices = {
-	{{-0.5f, -0.5f, 0}, {1, 0, 0}, {1, 0},},
-	{{0.5f, -0.5f, 0}, {0, 1, 0}, {0, 0}},
-	{{0.5f, 0.5f, 0}, {0, 0, 1}, {0, 1}},
-	{{-0.5f, 0.5f, 0}, {1, 1, 1}, {1, 1}},
-
-    {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
-    {{0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-    {{0.5f, 0.5f, -0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
-    {{-0.5f, 0.5f, -0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}
-};
-
-std::vector<uint16_t> const indices = {
-	0, 3, 2, 2, 1, 0,
-    4, 7, 6, 6, 5, 4
-};
 
 // why do I think there are already similar classes in vulkan.hpp?
 
@@ -1840,8 +1850,11 @@ struct VulkanCommon {
 	std::unique_ptr<VulkanDeviceMemoryBuffer> indexBuffer;
 	std::unique_ptr<VulkanDeviceMemoryImage> textureImage;
 
-	VkImageView textureImageView;
-	VkSampler textureSampler;
+	VkImageView textureImageView = {};
+	VkSampler textureSampler = {};
+    
+	std::vector<Vertex> vertices;
+    std::vector<uint32_t> indices;
 
 	// hmm should the map be a field?
 	std::vector<std::unique_ptr<VulkanDeviceMemoryBuffer>> uniformBuffers;
@@ -1907,6 +1920,7 @@ struct VulkanCommon {
 		createTextureImage();
 		createTextureImageView();
 		createTextureSampler();
+        loadModel();
 		
 		initVertexBuffer();
 		initIndexBuffer();
@@ -1938,7 +1952,9 @@ protected:
 		return true;
 	}
 
-	static constexpr int MAX_FRAMES_IN_FLIGHT = 2;
+	static constexpr std::string modelPath = "viking_room.obj";
+	static constexpr std::string texturePath = "viking_room.png";
+	static constexpr int maxFramesInFlight = 2;
 
 public:
 	~VulkanCommon() {
@@ -1955,7 +1971,7 @@ public:
 		vkDestroyImageView((*device)(), textureImageView, nullptr);
 		textureImage = nullptr;
 
-		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+		for (size_t i = 0; i < maxFramesInFlight; i++) {
 			vkDestroySemaphore((*device)(), renderFinishedSemaphores[i], nullptr);
 			vkDestroySemaphore((*device)(), imageAvailableSemaphores[i], nullptr);
 			vkDestroyFence((*device)(), inFlightFences[i], nullptr);
@@ -1970,10 +1986,9 @@ public:
 
 protected:
 	void createTextureImage() {
-		std::string filename = "texture.jpg";
-		std::shared_ptr<Image::Image> image = std::dynamic_pointer_cast<Image::Image>(Image::system->read(filename));
+		std::shared_ptr<Image::Image> image = std::dynamic_pointer_cast<Image::Image>(Image::system->read(texturePath));
 		if (!image) {
-			throw Common::Exception() << "failed to load image from " << filename;
+			throw Common::Exception() << "failed to load image from " << texturePath;
 		}
 		auto texSize = image->getSize();
 		
@@ -2036,6 +2051,46 @@ protected:
 		textureSampler = device->createSampler(&samplerInfo);
 	}
 
+    void loadModel() {
+        tinyobj::attrib_t attrib;
+        std::vector<tinyobj::shape_t> shapes;
+        std::vector<tinyobj::material_t> materials;
+        std::string warn, err;
+
+        if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, modelPath.c_str())) {
+            throw std::runtime_error(warn + err);
+        }
+
+        std::unordered_map<Vertex, uint32_t> uniqueVertices;
+
+        for (const auto& shape : shapes) {
+            for (const auto& index : shape.mesh.indices) {
+                Vertex vertex;
+
+                vertex.pos = {
+                    attrib.vertices[3 * index.vertex_index + 0],
+                    attrib.vertices[3 * index.vertex_index + 1],
+                    attrib.vertices[3 * index.vertex_index + 2]
+                };
+
+                vertex.texCoord = {
+                    attrib.texcoords[2 * index.texcoord_index + 0],
+                    1.0f - attrib.texcoords[2 * index.texcoord_index + 1]
+                };
+
+                vertex.color = {1.0f, 1.0f, 1.0f};
+
+                if (uniqueVertices.count(vertex) == 0) {
+                    uniqueVertices[vertex] = static_cast<uint32_t>(vertices.size());
+                    vertices.push_back(vertex);
+                }
+
+                indices.push_back(uniqueVertices[vertex]);
+            }
+        }
+    }
+
+
 	void recreateSwapChain() {
 		
 #if 0 //hmm why are there multiple events?
@@ -2086,10 +2141,10 @@ protected:
 	void initUniformBuffers() {
 		VkDeviceSize bufferSize = sizeof(UniformBufferObject);
 
-		uniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
-		uniformBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
+		uniformBuffers.resize(maxFramesInFlight);
+		uniformBuffersMapped.resize(maxFramesInFlight);
 
-		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+		for (size_t i = 0; i < maxFramesInFlight; i++) {
 			uniformBuffers[i] = std::make_unique<VulkanDeviceMemoryBuffer>(
 				physicalDevice.get(),
 				device.get(),
@@ -2110,7 +2165,7 @@ protected:
 	}
 
 	void initCommandBuffers() {
-		commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+		commandBuffers.resize(maxFramesInFlight);
 		auto allocInfo = VkCommandBufferAllocateInfo{
 			.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
 			.commandPool = (*commandPool)(),
@@ -2186,7 +2241,7 @@ protected:
 				commandBuffer,
 				(*indexBuffer)(),
 				0,
-				VK_INDEX_TYPE_UINT16
+				VK_INDEX_TYPE_UINT32
 			);
 
 			vkCmdBindDescriptorSets(
@@ -2216,9 +2271,9 @@ protected:
 	}
 
 	void initSyncObjects() {
-		imageAvailableSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
-		renderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
-		inFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
+		imageAvailableSemaphores.resize(maxFramesInFlight);
+		renderFinishedSemaphores.resize(maxFramesInFlight);
+		inFlightFences.resize(maxFramesInFlight);
 
 		auto semaphoreInfo = VkSemaphoreCreateInfo{
 			.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
@@ -2229,7 +2284,7 @@ protected:
 			.flags = VK_FENCE_CREATE_SIGNALED_BIT,
 		};
 
-		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+		for (size_t i = 0; i < maxFramesInFlight; i++) {
 			VULKAN_SAFE(vkCreateSemaphore, (*device)(), &semaphoreInfo, nullptr, &imageAvailableSemaphores[i]);
 			VULKAN_SAFE(vkCreateSemaphore, (*device)(), &semaphoreInfo, nullptr, &renderFinishedSemaphores[i]);
 			VULKAN_SAFE(vkCreateFence, (*device)(), &fenceInfo, nullptr, &inFlightFences[i]);
@@ -2240,17 +2295,17 @@ protected:
 		auto poolSizes = Common::make_array(
 			VkDescriptorPoolSize{
 				.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-				.descriptorCount = (uint32_t)MAX_FRAMES_IN_FLIGHT,
+				.descriptorCount = (uint32_t)maxFramesInFlight,
 			},
 			VkDescriptorPoolSize{
 				.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-				.descriptorCount = (uint32_t)MAX_FRAMES_IN_FLIGHT,
+				.descriptorCount = (uint32_t)maxFramesInFlight,
 			}
 		);
 
 		auto poolInfo = VkDescriptorPoolCreateInfo{
 			.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-			.maxSets = (uint32_t)MAX_FRAMES_IN_FLIGHT,
+			.maxSets = (uint32_t)maxFramesInFlight,
 			.poolSizeCount = (uint32_t)poolSizes.size(),
 			.pPoolSizes = poolSizes.data(),
 		};
@@ -2258,17 +2313,17 @@ protected:
 	}
 
 	void createDescriptorSets() {
-		std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, (*graphicsPipeline->getDescriptorSetLayout())());
+		std::vector<VkDescriptorSetLayout> layouts(maxFramesInFlight, (*graphicsPipeline->getDescriptorSetLayout())());
 		auto allocInfo = VkDescriptorSetAllocateInfo{
 			.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
 			.descriptorPool = descriptorPool,
-			.descriptorSetCount = (uint32_t)MAX_FRAMES_IN_FLIGHT,
+			.descriptorSetCount = (uint32_t)maxFramesInFlight,
 			.pSetLayouts = layouts.data(),
 		};
-		descriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
+		descriptorSets.resize(maxFramesInFlight);
 		VULKAN_SAFE(vkAllocateDescriptorSets, (*device)(), &allocInfo, descriptorSets.data());
 
-		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+		for (size_t i = 0; i < maxFramesInFlight; i++) {
 			auto bufferInfo = VkDescriptorBufferInfo{
 				.buffer = (*uniformBuffers[i])(),
 				.offset = 0,
@@ -2455,7 +2510,7 @@ public:
 			throw Common::Exception() << "vkQueuePresentKHR failed: " << result;
 		}
 
-		currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+		currentFrame = (currentFrame + 1) % maxFramesInFlight;
 	}
 public:
 	void loopDone() {

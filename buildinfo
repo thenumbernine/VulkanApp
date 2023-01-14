@@ -13,6 +13,10 @@ depends:append{
 --]=]
 libs:insert'vulkan'
 
+if platform == 'linux' then
+	env:addPackages'tinyobjloader'
+end
+
 local function exec(cmd)
 	print('>> '..cmd)
 	assert(os.execute(cmd))
