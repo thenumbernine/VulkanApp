@@ -933,10 +933,52 @@ public:
 	}
 };
 
+/*
+ok i've got 
+- VkBuffer with VkDeviceMemory
+- VkImage with VkDeviceMemory
+- VkImage with VkImageView (and VkFramebuffer?)
+*/
+struct VulkanImage : public VulkanHandle<VkImage> {
+	using Super = VulkanHandle<VkImage>;
+protected:
+	//holds
+	VulkanDevice const * device = {};
+public:
+	~VulkanImage() {
+		if (handle) vkDestroyImage((*device)(), handle, getAllocator());
+	}
+
+	VulkanImage(
+		VkImage handle_,
+		VulkanDevice const * const device_
+	) : Super(handle_),
+		device(device_)
+	{}
+};
+
+struct VulkanBuffer : public VulkanHandle<VkBuffer> {
+	using Super = VulkanHandle<VkBuffer>;
+protected:
+	//holds
+	VulkanDevice const * device = {};
+public:
+	~VulkanBuffer() {
+		if (handle) vkDestroyBuffer((*device)(), handle, getAllocator());
+	}
+
+	VulkanBuffer(
+		VkBuffer handle_,
+		VulkanDevice const * const device_
+	) : Super(handle_),
+		device(device_)
+	{}
+};
+
 // methods common to VkBuffer and VkImage
-template<typename Handle>
-struct VulkanDeviceMemoryParent  : public VulkanHandle<Handle> {
-	using Super = VulkanHandle<Handle>;
+template<typename Super_>
+struct VulkanDeviceMemoryParent  : public Super_ {
+	using Super = Super_;
 protected:
 	//owns
 	VkDeviceMemory memory = {};
@@ -951,10 +993,10 @@ public:
 	}
 
 	VulkanDeviceMemoryParent(
-		Handle handle_,
+		Super::Handle handle_,
 		VkDeviceMemory memory_,
 		VulkanDevice const * const device_
-	) : VulkanHandle<Handle>(handle_),
+	) : Super(handle_, device_),
 		memory(memory_),
 		device(device_)
 	{}
@@ -968,13 +1010,9 @@ public:
 	}
 };
 
-struct VulkanDeviceMemoryBuffer : public VulkanDeviceMemoryParent<VkBuffer> {
-	using Super = VulkanDeviceMemoryParent<VkBuffer>;
+struct VulkanDeviceMemoryBuffer : public VulkanDeviceMemoryParent<VulkanBuffer> {
+	using Super = VulkanDeviceMemoryParent<VulkanBuffer>;
 	using Super::Super;
-
-	~VulkanDeviceMemoryBuffer() {
-		if (Super::handle) vkDestroyBuffer((*device)(), Super::handle, getAllocator());
-	}
 
 	//ctor for VkBuffer's whether they are being ctor'd by staging or by uniforms whatever
 	VulkanDeviceMemoryBuffer(
@@ -1116,13 +1154,9 @@ protected:
 	}
 };
 
-struct VulkanDeviceMemoryImage : public VulkanDeviceMemoryParent<VkImage> {
-	using Super = VulkanDeviceMemoryParent<VkImage>;
+struct VulkanDeviceMemoryImage : public VulkanDeviceMemoryParent<VulkanImage> {
+	using Super = VulkanDeviceMemoryParent<VulkanImage>;
 	using Super::Super;
-
-	~VulkanDeviceMemoryImage() {
-		if (Super::handle) vkDestroyImage((*device)(), Super::handle, getAllocator());
-	}
 
 public:
 	// requires Handle == VkImage
@@ -1945,14 +1979,15 @@ protected:
 		if (!image) {
 			throw Common::Exception() << "failed to load image from " << filename;
 		}
-		int texWidth = image->getSize().x;
-		int texHeight = image->getSize().y;
+		auto texSize = image->getSize();
+		
+		// TODO move this into Image::Image setBitsPerPixel() or something
 		int texBPP = image->getBitsPerPixel() >> 3;
-			int desiredBPP = 4;
+		constexpr int desiredBPP = 4;
 		if (texBPP != desiredBPP) {
 			//resample
 			auto newimage = std::make_shared<Image::Image>(image->getSize(), nullptr, desiredBPP);
-			for (int i = 0; i < texWidth * texHeight; ++i) {
+			for (int i = 0; i < texSize.x * texSize.y; ++i) {
 				int j = 0;
 				for (; j < texBPP && j < desiredBPP; ++j) {
 					newimage->getData()[desiredBPP*i+j] = image->getData()[texBPP*i+j];
@@ -1964,8 +1999,9 @@ protected:
 			image = newimage;
 			texBPP = image->getBitsPerPixel() >> 3;
 		}
-		char * srcData = image->getData();
-		VkDeviceSize bufferSize = texWidth * texHeight * texBPP;
+		
+		char const * const srcData = image->getData();
+		VkDeviceSize const bufferSize = texSize.x * texSize.y * texBPP;
 	
 		textureImage = VulkanDeviceMemoryImage::makeTextureFromStaged(
 			physicalDevice.get(),
@@ -1973,8 +2009,8 @@ protected:
 			commandPool.get(),
 			srcData,
 			bufferSize,
-			texWidth,
-			texHeight
+			texSize.x,
+			texSize.y
 		);
 	}
 
