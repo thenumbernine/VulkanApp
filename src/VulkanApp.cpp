@@ -991,6 +991,48 @@ public:
 		handle = device_->createCommandPool(&poolInfo);
 	}
 
+	//copies based on the graphicsQueue
+	// used by makeBufferFromStaged
+	void copyBuffer(
+		VkBuffer srcBuffer,	//staging VkBuffer
+		VkBuffer dstBuffer,	//dest VkBuffer
+		VkDeviceSize size
+	) const {
+		auto allocInfo = VkCommandBufferAllocateInfo{
+			.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+			.commandPool = (*this)(),
+			.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+			.commandBufferCount = 1,
+		};
+		auto commandBuffer = VkCommandBuffer{};
+		vkAllocateCommandBuffers((*device)(), &allocInfo, &commandBuffer);
+
+		auto beginInfo = VkCommandBufferBeginInfo{
+			.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+			.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+		};
+		vkBeginCommandBuffer(commandBuffer, &beginInfo);
+
+		{
+			auto copyRegion = VkBufferCopy{
+				.size = size,
+			};
+			vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, &copyRegion);
+		}
+
+		vkEndCommandBuffer(commandBuffer);
+
+		auto submitInfo = VkSubmitInfo{
+			.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+			.commandBufferCount = 1,
+			.pCommandBuffers = &commandBuffer,
+		};
+		vkQueueSubmit((*device->getGraphicsQueue())(), 1, &submitInfo, VK_NULL_HANDLE);
+		vkQueueWaitIdle((*device->getGraphicsQueue())());
+
+		vkFreeCommandBuffers((*device)(), (*this)(), 1, &commandBuffer);
+	}
+
 	void copyBufferToImage(
 		VkBuffer buffer,
 		VkImage image,
@@ -1242,61 +1284,13 @@ public:
 			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
 		);
 		
-		copyBuffer(
-			device,
-			commandPool,
+		commandPool->copyBuffer(
 			(*stagingBuffer)(),
 			(*buffer)(),
 			bufferSize
 		);
 	
 		return buffer;
-	}
-
-protected:
-	//copies based on the graphicsQueue
-	// used by makeBufferFromStaged
-	static void copyBuffer(
-		VulkanDevice const * const device,
-		VulkanCommandPool const * const commandPool,
-		VkBuffer srcBuffer,	//staging VkBuffer
-		VkBuffer dstBuffer,	//dest VkBuffer
-		VkDeviceSize size
-	) {
-		auto allocInfo = VkCommandBufferAllocateInfo{
-			.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-			.commandPool = (*commandPool)(),
-			.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-			.commandBufferCount = 1,
-		};
-
-		auto commandBuffer = VkCommandBuffer{};
-		vkAllocateCommandBuffers((*device)(), &allocInfo, &commandBuffer);
-
-		auto beginInfo = VkCommandBufferBeginInfo{
-			.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-			.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-		};
-		vkBeginCommandBuffer(commandBuffer, &beginInfo);
-
-		{
-			auto copyRegion = VkBufferCopy{
-				.size = size,
-			};
-			vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, &copyRegion);
-		}
-
-		vkEndCommandBuffer(commandBuffer);
-
-		auto submitInfo = VkSubmitInfo{
-			.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-			.commandBufferCount = 1,
-			.pCommandBuffers = &commandBuffer,
-		};
-		vkQueueSubmit((*device->getGraphicsQueue())(), 1, &submitInfo, VK_NULL_HANDLE);
-		vkQueueWaitIdle((*device->getGraphicsQueue())());
-
-		vkFreeCommandBuffers((*device)(), (*commandPool)(), 1, &commandBuffer);
 	}
 };
 
@@ -1455,7 +1449,6 @@ public:
 		VulkanSurface const * const surface
 	) : device(device_) {
 		auto swapChainSupport = physicalDevice->querySwapChainSupport((*surface)());
-
 		auto surfaceFormat = chooseSwapSurfaceFormat(swapChainSupport.formats);
 		auto presentMode = chooseSwapPresentMode(swapChainSupport.presentModes);
 		extent = chooseSwapExtent(screenSize, swapChainSupport.capabilities);
