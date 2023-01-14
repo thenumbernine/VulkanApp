@@ -139,19 +139,21 @@ _mat<real,4,4> rotate(
 }
 
 //gluLookAt
+//https://stackoverflow.com/questions/21830340/understanding-glmlookat
 template<typename real>
 _mat<real,4,4> lookAt(
 	_vec<real,3> eye,
 	_vec<real,3> center,
 	_vec<real,3> up
 ) {
-	auto l = (center - eye).normalize();
-	auto s = l.cross(up).normalize();
-	auto up2 = s.cross(l);
+	auto Z = (center - eye).normalize();
+	auto Y = up;
+	auto X = Y.cross(Z).normalize();
+	Y = Z.cross(X);
 	return _mat<real,4,4>{
-		{s.x, up2.x, -l.x, -eye.x},
-		{s.y, up2.y, -l.y, -eye.y},
-		{s.z, up2.z, -l.z, -eye.z},
+		{X.x, Y.x, -Z.x, -eye.dot(X)},
+		{X.y, Y.y, -Z.y, -eye.dot(Y)},
+		{X.z, Y.z, -Z.z, -eye.dot(Z)},
 		{0, 0, 0, 1},
 	};
 }
@@ -1176,7 +1178,7 @@ public:
 			.rasterizerDiscardEnable = VK_FALSE,
 			.polygonMode = VK_POLYGON_MODE_FILL,
 			.cullMode = VK_CULL_MODE_BACK_BIT,
-#if 0		//this is what lesson 22 says	to change things to (for use with future tutorials)
+#if 1		//this is what lesson 22 says	to change things to (for use with future tutorials)
 			// this was changed in lesson 23 ...
 			// I bet once I get transforms working it'll matter
 			.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
@@ -2200,6 +2202,7 @@ protected:
 			time * degToRad<float>(90),
 			Tensor::float3(0, 0, 1)
 		);
+		//isn't working ...
 		ubo.view = Tensor::lookAt<float>(
 			Tensor::float3(2, 2, 2),
 			Tensor::float3(0, 0, 0),
@@ -2212,21 +2215,53 @@ protected:
 			10
 		);
 		ubo.proj[1][1] *= -1;
-
-
-// trying to find whats wrong with using ubo matrices...
-// my matrices are transposed memory layout from opengl (I think?)
-#if 1
-ubo.model = ubo.model.transpose();
-//ubo.view = ubo.view.transpose();
-//ubo.proj = ubo.proj.transpose();
-#endif
-#if 1
-//ubo.model = Tensor::float4i4(1);	// works
-//ubo.view = Tensor::float4i4(1);	// hmm works but incorrect?
-ubo.proj = Tensor::float4i4(1);	// this has bad data
-#endif
-
+/*
+working buffer.  in-order in memory as it gets passed to Vulkan:
+float[3][4][4] buf = {
+	//model
+	{
+		{-0.724425, 0.689354, 0.000000, 0.000000},
+		{-0.689354, -0.724425, 0.000000, 0.000000},
+		{0.000000, 0.000000, 1.000000, 0.000000},
+		{0.000000, 0.000000, 0.000000, 1.000000},
+	},
+	//view
+	{
+		{-0.707107, -0.408248, 0.577350, 0.000000},
+		{0.707107, -0.408248, 0.577350, 0.000000},
+		{0.000000, 0.816497, 0.577350, 0.000000},
+		{-0.000000, -0.000000, -3.464102, 1.000000},
+	},
+	//proj
+	{
+		{1.810660, 0.000000, 0.000000, 0.000000},
+		{0.000000, -2.414213, 0.000000, 0.000000},
+		{0.000000, 0.000000, -1.020202, -1.000000},
+		{0.000000, 0.000000, -0.202020, 0.000000},
+	},
+};
+*/
+		// I use row-major, Vulkan/GL uses column-major
+		ubo.model = ubo.model.transpose();
+		ubo.view = ubo.view.transpose();
+		ubo.proj = ubo.proj.transpose();
+/*
+		ubo.view = {
+			{-0.707107, -0.408248, 0.577350, 0.000000},
+			{0.707107, -0.408248, 0.577350, 0.000000},
+			{0.000000, 0.816497, 0.577350, 0.000000},
+			{-0.000000, -0.000000, -3.464102, 1.000000},
+		};
+*/		
+//std::cout << ubo.view << std::endl;	
+/*
+{
+	{0.707107, -0.707107, 0, 0},
+	{-0.408248, -0.408248, 0.816497, 0},
+	{0.57735, 0.57735, 0.57735, 0},
+	{-0, -0, 3.4641, 1}
+}
+*/
 		memcpy(uniformBuffersMapped[currentFrame_], &ubo, sizeof(ubo));
 	}
 public:
