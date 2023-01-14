@@ -580,6 +580,10 @@ struct VulkanPhysicalDevice : public VulkanHandle<VkPhysicalDevice> {
 	}
 
 	// ************** from here on down, app-specific **************  
+protected:
+	VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_1_BIT;
+public:
+	auto getMSAASamples() const { return msaaSamples; }
 
 	// used by the application for specific physical device querying (should be a subclass of the general VulkanPhysicalDevice)
 	VulkanPhysicalDevice(
@@ -605,13 +609,13 @@ struct VulkanPhysicalDevice : public VulkanHandle<VkPhysicalDevice> {
 			auto o = VulkanPhysicalDevice(h);
 			if (o.isDeviceSuitable(surface, deviceExtensions)) {
 				handle = h;
+                msaaSamples = getMaxUsableSampleCount();
 				break;
 			}
 		}
 
 		if (!handle) throw Common::Exception() << "failed to find a suitable GPU!";
 	}
-
 protected:
 	bool isDeviceSuitable(
 		VkSurfaceKHR surface,								// needed by findQueueFamilies, querySwapChainSupport
@@ -641,6 +645,21 @@ protected:
 		}
 		return requiredExtensions.empty();
 	}
+
+    VkSampleCountFlagBits getMaxUsableSampleCount() const {
+        auto physicalDeviceProperties = VkPhysicalDeviceProperties{};
+        vkGetPhysicalDeviceProperties((*this)(), &physicalDeviceProperties);
+
+        VkSampleCountFlags counts = physicalDeviceProperties.limits.framebufferColorSampleCounts & physicalDeviceProperties.limits.framebufferDepthSampleCounts;
+        if (counts & VK_SAMPLE_COUNT_64_BIT) { return VK_SAMPLE_COUNT_64_BIT; }
+        if (counts & VK_SAMPLE_COUNT_32_BIT) { return VK_SAMPLE_COUNT_32_BIT; }
+        if (counts & VK_SAMPLE_COUNT_16_BIT) { return VK_SAMPLE_COUNT_16_BIT; }
+        if (counts & VK_SAMPLE_COUNT_8_BIT) { return VK_SAMPLE_COUNT_8_BIT; }
+        if (counts & VK_SAMPLE_COUNT_4_BIT) { return VK_SAMPLE_COUNT_4_BIT; }
+        if (counts & VK_SAMPLE_COUNT_2_BIT) { return VK_SAMPLE_COUNT_2_BIT; }
+
+        return VK_SAMPLE_COUNT_1_BIT;
+    }
 
 public:
 	struct QueueFamilyIndices {
@@ -854,40 +873,53 @@ public:
 		auto attachments = Common::make_array(
 			VkAttachmentDescription{	//colorAttachment
 				.format = swapChainImageFormat,
-				.samples = VK_SAMPLE_COUNT_1_BIT,
+				.samples = physicalDevice->getMSAASamples(),
 				.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
 				.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
 				.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
 				.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
 				.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-				.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+				.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
 			},
 			VkAttachmentDescription{	//depthAttachment
 				.format = physicalDevice->findDepthFormat(),
-				.samples = VK_SAMPLE_COUNT_1_BIT,
+				.samples = physicalDevice->getMSAASamples(),
 				.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
 				.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
 				.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
 				.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
 				.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
 				.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+			},
+			VkAttachmentDescription{	//colorAttachmentResolve
+				.format = swapChainImageFormat,
+				.samples = VK_SAMPLE_COUNT_1_BIT,
+				.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+				.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+				.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+				.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+				.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+				.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
 			}
 		);
-		auto colorAttachmentRefs = Common::make_array(
-			VkAttachmentReference{	//colorAttachmentRef
-				.attachment = 0,
-				.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-			}
-		);
+		auto colorAttachmentRef = VkAttachmentReference{
+			.attachment = 0,
+			.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+		};
 		auto depthAttachmentRef = VkAttachmentReference{
 			.attachment = 1,
 			.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
 		};	
+        auto colorAttachmentResolveRef = VkAttachmentReference{
+			.attachment = 2,
+			.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+		};
 		auto subpasses = Common::make_array(
 			VkSubpassDescription{
 				.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
-				.colorAttachmentCount = (uint32_t)colorAttachmentRefs.size(),
-				.pColorAttachments = colorAttachmentRefs.data(),
+				.colorAttachmentCount = 1,
+				.pColorAttachments = &colorAttachmentRef,
+        		.pResolveAttachments = &colorAttachmentResolveRef,
 				.pDepthStencilAttachment = &depthAttachmentRef,
 			}
 		);
@@ -1337,9 +1369,12 @@ public:
 			texWidth,
 			texHeight,
 			mipLevels,
+			VK_SAMPLE_COUNT_1_BIT,
 			VK_FORMAT_R8G8B8A8_SRGB,
 			VK_IMAGE_TILING_OPTIMAL,
-			VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+			VK_IMAGE_USAGE_TRANSFER_SRC_BIT 
+			| VK_IMAGE_USAGE_TRANSFER_DST_BIT 
+			| VK_IMAGE_USAGE_SAMPLED_BIT,
 			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
 		);
 
@@ -1375,6 +1410,7 @@ public:
 		uint32_t width,
 		uint32_t height,
 		uint32_t mipLevels,
+		VkSampleCountFlagBits numSamples,
 		VkFormat format,
 		VkImageTiling tiling,
 		VkImageUsageFlags usage,
@@ -1392,7 +1428,7 @@ public:
 			},
 			.mipLevels = mipLevels,
 			.arrayLayers = 1,
-			.samples = VK_SAMPLE_COUNT_1_BIT,
+			.samples = numSamples,
 			.tiling = tiling,
 			.usage = usage,
 			.sharingMode = VK_SHARING_MODE_EXCLUSIVE,
@@ -1426,6 +1462,9 @@ protected:
 
     std::unique_ptr<VulkanDeviceMemoryImage> depthImage;
     VkImageView depthImageView = {};
+
+    std::unique_ptr<VulkanDeviceMemoryImage> colorImage;
+    VkImageView colorImageView = {};
 public:
 	VkExtent2D extent = {};
 	
@@ -1443,6 +1482,9 @@ public:
 	~VulkanSwapChain() {
         vkDestroyImageView((*device)(), depthImageView, getAllocator());
         depthImage = nullptr;
+        
+		vkDestroyImageView((*device)(), colorImageView, getAllocator());
+        colorImage = nullptr;
 		
 		for (auto framebuffer : framebuffers) {
 			vkDestroyFramebuffer((*device)(), framebuffer, getAllocator());
@@ -1519,6 +1561,27 @@ public:
 		}
 	
 		renderPass = std::make_unique<VulkanRenderPass>(physicalDevice, device_, surfaceFormat.format);
+        
+		//createColorResources
+        VkFormat colorFormat = surfaceFormat.format;
+        colorImage = VulkanDeviceMemoryImage::createImage(
+			physicalDevice,
+			device,
+			extent.width,
+			extent.height,
+			1,
+			physicalDevice->getMSAASamples(),
+			colorFormat,
+			VK_IMAGE_TILING_OPTIMAL,
+			VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+		);
+        colorImageView = createImageView(
+			(*colorImage)(),
+			colorFormat,
+			VK_IMAGE_ASPECT_COLOR_BIT,
+			1
+		);
 		
 		//createDepthResources
         VkFormat depthFormat = physicalDevice->findDepthFormat();
@@ -1528,6 +1591,7 @@ public:
 			extent.width,
 			extent.height,
 			1,
+			physicalDevice->getMSAASamples(),
 			depthFormat,
 			VK_IMAGE_TILING_OPTIMAL,
 			VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
@@ -1544,8 +1608,9 @@ public:
 		framebuffers.resize(imageViews.size());
 		for (size_t i = 0; i < imageViews.size(); i++) {
 			auto attachments = Common::make_array(
-				imageViews[i],
-				depthImageView
+				colorImageView,
+				depthImageView,
+				imageViews[i]
 			);
 			auto framebufferInfo = VkFramebufferCreateInfo{
 				.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
@@ -1709,6 +1774,7 @@ public:
 	}
 
 	VulkanGraphicsPipeline(
+		VulkanPhysicalDevice const * const physicalDevice,
 		VulkanDevice const * const device_,
 		VulkanRenderPass const * const renderPass
 	) : device(device_) {
@@ -1780,7 +1846,7 @@ public:
 
 		auto multisampling = VkPipelineMultisampleStateCreateInfo{
 			.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-			.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+			.rasterizationSamples = physicalDevice->getMSAASamples(),
 			.sampleShadingEnable = VK_FALSE,
 		};
 
@@ -1932,6 +1998,7 @@ struct VulkanCommon {
 		);
 		
 		graphicsPipeline = std::make_unique<VulkanGraphicsPipeline>(
+			physicalDevice.get(),
 			device.get(),
 			swapChain->getRenderPass()
 		);
