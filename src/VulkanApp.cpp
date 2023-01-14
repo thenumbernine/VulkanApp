@@ -913,16 +913,16 @@ public:
 struct VulkanCommandPool : public VulkanHandle<VkCommandPool> {
 protected:
 	//held:
-	VkDevice device = {};
+	VulkanDevice const * const device = {};
 public:
 	~VulkanCommandPool() {
-		if (handle) vkDestroyCommandPool(device, handle, getAllocator());
+		if (handle) vkDestroyCommandPool((*device)(), handle, getAllocator());
 	}
 	VulkanCommandPool(
 		VulkanPhysicalDevice const * const physicalDevice,
-		VkSurfaceKHR surface,
-		VulkanDevice const * const device_
-	) : device((*device_)()) {
+		VulkanDevice const * const device_,
+		VkSurfaceKHR surface
+	) : device(device_) {
 		auto queueFamilyIndices = physicalDevice->findQueueFamilies(surface);
 		auto poolInfo = VkCommandPoolCreateInfo{
 			.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
@@ -930,6 +930,138 @@ public:
 			.queueFamilyIndex = queueFamilyIndices.graphicsFamily.value(),
 		};
 		handle = device_->createCommandPool(&poolInfo);
+	}
+
+	void copyBufferToImage(
+		VkBuffer buffer,
+		VkImage image,
+		uint32_t width,
+		uint32_t height
+	) const {
+		VkCommandBuffer commandBuffer = beginSingleTimeCommands();
+
+		auto region = VkBufferImageCopy{
+			.bufferOffset = 0,
+			.bufferRowLength = 0,
+			.bufferImageHeight = 0,
+			.imageSubresource = {
+				.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+				.mipLevel = 0,
+				.baseArrayLayer = 0,
+				.layerCount = 1,
+			},
+			.imageOffset = {0, 0, 0},
+			.imageExtent = {
+				width,
+				height,
+				1
+			},
+		};
+		vkCmdCopyBufferToImage(
+			commandBuffer,
+			buffer,
+			image,
+			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+			1,
+			&region
+		);
+
+		endSingleTimeCommands(commandBuffer);
+	}
+
+	void transitionImageLayout(
+		VkImage image,
+		VkFormat format,
+		VkImageLayout oldLayout,
+		VkImageLayout newLayout
+	) const {
+		VkCommandBuffer commandBuffer = beginSingleTimeCommands();
+
+		auto barrier = VkImageMemoryBarrier{
+			.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+			.oldLayout = oldLayout,
+			.newLayout = newLayout,
+			.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+			.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+			.image = image,
+			.subresourceRange = {
+				.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+				.baseMipLevel = 0,
+				.levelCount = 1,
+				.baseArrayLayer = 0,
+				.layerCount = 1,
+			},
+		};
+
+		VkPipelineStageFlags sourceStage;
+		VkPipelineStageFlags destinationStage;
+
+		if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+			barrier.srcAccessMask = 0;
+			barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+			sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+			destinationStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+		} else if (oldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+			barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+			barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+			sourceStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+			destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+		} else {
+			throw std::invalid_argument("unsupported layout transition!");
+		}
+
+		vkCmdPipelineBarrier(
+			commandBuffer,
+			sourceStage, destinationStage,
+			0,
+			0, nullptr,
+			0, nullptr,
+			1, &barrier
+		);
+
+		endSingleTimeCommands(commandBuffer);
+	}
+
+
+protected:
+	VkCommandBuffer beginSingleTimeCommands() const {
+		auto allocInfo = VkCommandBufferAllocateInfo{
+			.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+			.commandPool = (*this)(),
+			.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+			.commandBufferCount = 1,
+		};
+
+		auto commandBuffer = VkCommandBuffer{};
+		vkAllocateCommandBuffers((*device)(), &allocInfo, &commandBuffer);
+
+		auto beginInfo = VkCommandBufferBeginInfo{
+			.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+			.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+		};
+
+		vkBeginCommandBuffer(commandBuffer, &beginInfo);
+
+		return commandBuffer;
+	}
+
+	void endSingleTimeCommands(
+		VkCommandBuffer commandBuffer
+	) const {
+		vkEndCommandBuffer(commandBuffer);
+
+		auto submitInfo = VkSubmitInfo{
+			.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+			.commandBufferCount = 1,
+			.pCommandBuffers = &commandBuffer,
+		};
+
+		vkQueueSubmit((*device->getGraphicsQueue())(), 1, &submitInfo, VK_NULL_HANDLE);
+		vkQueueWaitIdle((*device->getGraphicsQueue())());
+
+		vkFreeCommandBuffers((*device)(), (*this)(), 1, &commandBuffer);
 	}
 };
 
@@ -975,7 +1107,7 @@ public:
 	{}
 };
 
-// methods common to VkBuffer and VkImage
+// methods common to VkBuffer and VkImage paired with VkDeviceMemory
 template<typename Super_>
 struct VulkanDeviceMemoryParent  : public Super_ {
 	using Super = Super_;
@@ -1073,7 +1205,6 @@ struct VulkanDeviceMemoryBuffer : public VulkanDeviceMemoryParent<VulkanBuffer> 
 	}
 
 public:
-	// requires Handle == VkBuffer
 	static std::unique_ptr<VulkanDeviceMemoryBuffer> makeBufferFromStaged(
 		VulkanPhysicalDevice const * const physicalDevice,
 		VulkanDevice const * const device,
@@ -1114,7 +1245,7 @@ protected:
 		VulkanDevice const * const device,
 		VulkanCommandPool const * const commandPool,
 		VkBuffer srcBuffer,	//staging VkBuffer
-		Handle dstBuffer,	//dest VkBuffer
+		VkBuffer dstBuffer,	//dest VkBuffer
 		VkDeviceSize size
 	) {
 		auto allocInfo = VkCommandBufferAllocateInfo{
@@ -1159,7 +1290,6 @@ struct VulkanDeviceMemoryImage : public VulkanDeviceMemoryParent<VulkanImage> {
 	using Super::Super;
 
 public:
-	// requires Handle == VkImage
 	static std::unique_ptr<VulkanDeviceMemoryImage>
 	makeTextureFromStaged(
 		VulkanPhysicalDevice const * const physicalDevice,
@@ -1178,7 +1308,6 @@ public:
 			bufferSize
 		);
 		
-		// but here we have the destination isn't a VkBuffer, it's a VkImage
 		auto image = createImage(
 			physicalDevice,
 			device,
@@ -1190,22 +1319,20 @@ public:
 			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
 		);
 
-		image->transitionImageLayout(
-			commandPool,
+		commandPool->transitionImageLayout(
+			(*image)(),
 			VK_FORMAT_R8G8B8A8_SRGB,
 			VK_IMAGE_LAYOUT_UNDEFINED,
 			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
 		);
-		copyBufferToImage(
-			device,
-			commandPool,
+		commandPool->copyBufferToImage(
 			(*stagingBuffer)(),
 			(*image)(),
 			(uint32_t)texWidth,
 			(uint32_t)texHeight
 		);
-		image->transitionImageLayout(
-			commandPool,
+		commandPool->transitionImageLayout(
+			(*image)(),
 			VK_FORMAT_R8G8B8A8_SRGB,
 			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 			VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
@@ -1260,145 +1387,7 @@ public:
 		
 		return std::make_unique<VulkanDeviceMemoryImage>(image, imageMemory, device);
 	}
-
-	void transitionImageLayout(
-		VulkanCommandPool const * const commandPool,
-		VkFormat format,
-		VkImageLayout oldLayout,
-		VkImageLayout newLayout
-	) {
-		VkCommandBuffer commandBuffer = beginSingleTimeCommands(Super::device, commandPool);
-
-		auto barrier = VkImageMemoryBarrier{
-			.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-			.oldLayout = oldLayout,
-			.newLayout = newLayout,
-			.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-			.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-			.image = (*this)(),
-			.subresourceRange = {
-				.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-				.baseMipLevel = 0,
-				.levelCount = 1,
-				.baseArrayLayer = 0,
-				.layerCount = 1,
-			},
-		};
-
-		VkPipelineStageFlags sourceStage;
-		VkPipelineStageFlags destinationStage;
-
-		if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
-			barrier.srcAccessMask = 0;
-			barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-
-			sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-			destinationStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-		} else if (oldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
-			barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-			barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-			sourceStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-			destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-		} else {
-			throw std::invalid_argument("unsupported layout transition!");
-		}
-
-		vkCmdPipelineBarrier(
-			commandBuffer,
-			sourceStage, destinationStage,
-			0,
-			0, nullptr,
-			0, nullptr,
-			1, &barrier
-		);
-
-		endSingleTimeCommands(Super::device, commandPool, commandBuffer);
-	}
-
-	static void copyBufferToImage(
-		VulkanDevice const * const device,
-		VulkanCommandPool const * const commandPool,
-		VkBuffer buffer,
-		VkImage image,
-		uint32_t width,
-		uint32_t height
-	) {
-		VkCommandBuffer commandBuffer = beginSingleTimeCommands(device, commandPool);
-
-		auto region = VkBufferImageCopy{
-			.bufferOffset = 0,
-			.bufferRowLength = 0,
-			.bufferImageHeight = 0,
-			.imageSubresource = {
-				.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-				.mipLevel = 0,
-				.baseArrayLayer = 0,
-				.layerCount = 1,
-			},
-			.imageOffset = {0, 0, 0},
-			.imageExtent = {
-				width,
-				height,
-				1
-			},
-		};
-		vkCmdCopyBufferToImage(
-			commandBuffer,
-			buffer,
-			image,
-			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-			1,
-			&region
-		);
-
-		endSingleTimeCommands(device, commandPool, commandBuffer);
-	}
-
-	static VkCommandBuffer beginSingleTimeCommands(
-		VulkanDevice const * const device,
-		VulkanCommandPool const * const commandPool
-	) {
-		auto allocInfo = VkCommandBufferAllocateInfo{
-			.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-			.commandPool = (*commandPool)(),
-			.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-			.commandBufferCount = 1,
-		};
-
-		auto commandBuffer = VkCommandBuffer{};
-		vkAllocateCommandBuffers((*device)(), &allocInfo, &commandBuffer);
-
-		auto beginInfo = VkCommandBufferBeginInfo{
-			.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-			.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-		};
-
-		vkBeginCommandBuffer(commandBuffer, &beginInfo);
-
-		return commandBuffer;
-	}
-
-	static void endSingleTimeCommands(
-		VulkanDevice const * const device,
-		VulkanCommandPool const * const commandPool,
-		VkCommandBuffer commandBuffer
-	) {
-		vkEndCommandBuffer(commandBuffer);
-
-		auto submitInfo = VkSubmitInfo{
-			.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-			.commandBufferCount = 1,
-			.pCommandBuffers = &commandBuffer,
-		};
-
-		vkQueueSubmit((*device->getGraphicsQueue())(), 1, &submitInfo, VK_NULL_HANDLE);
-		vkQueueWaitIdle((*device->getGraphicsQueue())());
-
-		vkFreeCommandBuffers((*device)(), (*commandPool)(), 1, &commandBuffer);
-	}
 };
-
 
 struct VulkanSwapChain : public VulkanHandle<VkSwapchainKHR> {
 protected:
@@ -1904,8 +1893,8 @@ struct VulkanCommon {
 		
 		commandPool = std::make_unique<VulkanCommandPool>(
 			physicalDevice.get(),
-			(*surface)(),
-			device.get()
+			device.get(),
+			(*surface)()
 		);
 	
 		createTextureImage();
