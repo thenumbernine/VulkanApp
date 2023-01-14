@@ -237,8 +237,8 @@ std::vector<Vertex> const vertices = {
 };
 
 std::vector<uint16_t> const indices = {
-	0, 1, 2, 2, 3, 0,
-    4, 5, 6, 6, 7, 4
+	0, 3, 2, 2, 1, 0,
+    4, 7, 6, 6, 5, 4
 };
 
 // hmm is it worth it to pass the child in, so that Traits can access child members, and use them for its methods?
@@ -607,32 +607,14 @@ protected:
 		VkSurfaceKHR surface,								// needed by findQueueFamilies, querySwapChainSupport
 		std::vector<char const *> const & deviceExtensions	// needed by checkDeviceExtensionSupport
 	) const {
-#if 0	// i'm not seeing queue families indices and the actual physicalDevice info query overlap
-		// or is querying individual devices properties not a thing anymore?
-		// do you just search for the queue family bit? graphics? compute? whatever?
-
-		auto physDevProps = getProperties();
-		VkPhysicalDeviceFeatures deviceFeatures;
-		vkGetPhysicalDeviceFeatures((*this)(), &deviceFeatures);
-		// TODO sort by score and pick the best
-		return physDevProps.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU
-			|| physDevProps.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU
-			|| physDevProps.deviceType == VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU
-		;
-			// && deviceFeatures.geometryShader;
-#endif
 		auto indices = findQueueFamilies(surface);
-		
 		bool extensionsSupported = checkDeviceExtensionSupport(deviceExtensions);
-
 		bool swapChainAdequate = false;
 		if (extensionsSupported) {
 			auto swapChainSupport = querySwapChainSupport(surface);
 			swapChainAdequate = !swapChainSupport.formats.empty() && !swapChainSupport.presentModes.empty();
 		}
-
 		VkPhysicalDeviceFeatures features = getFeatures();
-
 		return indices.isComplete()
 			&& extensionsSupported
 			&& swapChainAdequate
@@ -903,10 +885,16 @@ public:
 			VkSubpassDependency{
 				.srcSubpass = VK_SUBPASS_EXTERNAL,
 				.dstSubpass = 0,
-				.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-				.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+				.srcStageMask = 
+					VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | 
+					VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+				.dstStageMask = 
+					VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | 
+					VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
 				.srcAccessMask = 0,
-				.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+				.dstAccessMask = 
+					VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | 
+					VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
 			}
 		);
 		auto renderPassInfo = VkRenderPassCreateInfo{
@@ -1204,8 +1192,6 @@ public:
 		VkMemoryPropertyFlags properties
 	) {
 		auto image = VkImage{};
-		auto imageMemory = VkDeviceMemory{};
-
 		auto imageInfo = VkImageCreateInfo{
 			.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
 			.imageType = VK_IMAGE_TYPE_2D,
@@ -1228,6 +1214,7 @@ public:
 		auto memRequirements = VkMemoryRequirements{};
 		vkGetImageMemoryRequirements((*device)(), image, &memRequirements);
 
+		auto imageMemory = VkDeviceMemory{};
 		auto allocInfo = VkMemoryAllocateInfo{
 			.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
 			.allocationSize = memRequirements.size,
@@ -1723,13 +1710,7 @@ public:
 			.rasterizerDiscardEnable = VK_FALSE,
 			.polygonMode = VK_POLYGON_MODE_FILL,
 			.cullMode = VK_CULL_MODE_BACK_BIT,
-#if 1		//this is what lesson 22 says	to change things to (for use with future tutorials)
-			// this was changed in lesson 23 ...
-			// I bet once I get transforms working it'll matter
-			.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
-#else
 			.frontFace = VK_FRONT_FACE_CLOCKWISE,
-#endif
 			.depthBiasEnable = VK_FALSE,
 			.lineWidth = 1,
 		};
