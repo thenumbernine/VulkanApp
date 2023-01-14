@@ -178,8 +178,6 @@ _mat<real,4,4> perspective(
 
 }
 
-// why do I think there are already similar classes in vulkan.hpp?
-
 struct Vertex {
 	Tensor::float3 pos;
 	Tensor::float3 color;
@@ -240,6 +238,8 @@ std::vector<uint16_t> const indices = {
 	0, 3, 2, 2, 1, 0,
     4, 7, 6, 6, 5, 4
 };
+
+// why do I think there are already similar classes in vulkan.hpp?
 
 // hmm is it worth it to pass the child in, so that Traits can access child members, and use them for its methods?
 // or at this point do I just leave the function calls in the child class?
@@ -1299,8 +1299,7 @@ struct VulkanDeviceMemoryImage : public VulkanDeviceMemoryParent<VulkanImage> {
 	using Super::Super;
 
 public:
-	static std::unique_ptr<VulkanDeviceMemoryImage>
-	makeTextureFromStaged(
+	static std::unique_ptr<VulkanDeviceMemoryImage> makeTextureFromStaged(
 		VulkanPhysicalDevice const * const physicalDevice,
 		VulkanDevice const * const device,
 		VulkanCommandPool const * const commandPool,
@@ -2308,11 +2307,10 @@ protected:
 		}
 	}
 
-
-	//decltype(std::chrono::high_resolution_clock::now()) startTime = std::chrono::high_resolution_clock::now();
+	decltype(std::chrono::high_resolution_clock::now()) startTime = std::chrono::high_resolution_clock::now();
 	
 	void updateUniformBuffer(uint32_t currentFrame_) {
-		static auto startTime = std::chrono::high_resolution_clock::now();
+		//static auto startTime = std::chrono::high_resolution_clock::now();
 		auto currentTime = std::chrono::high_resolution_clock::now();
 		float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
 
