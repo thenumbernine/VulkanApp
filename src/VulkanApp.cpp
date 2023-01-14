@@ -713,7 +713,7 @@ struct VulkanQueue : public VulkanHandle<VkQueue> {
 	// queues have no destroy function ...
 };
 
-struct VulkanLogicalDevice : public VulkanHandle<VkDevice> {
+struct VulkanDevice : public VulkanHandle<VkDevice> {
 protected:
 	std::unique_ptr<VulkanQueue> graphicsQueue;
 	std::unique_ptr<VulkanQueue> presentQueue;
@@ -721,7 +721,7 @@ public:
 	VulkanQueue const * getGraphicsQueue() const { return graphicsQueue.get(); }
 	VulkanQueue const * getPresentQueue() const { return presentQueue.get(); }
 	
-	~VulkanLogicalDevice() {
+	~VulkanDevice() {
 		if (handle) vkDestroyDevice(handle, getAllocator());
 	}
 	
@@ -778,7 +778,7 @@ CREATE_CREATER(Sampler, )
 
 	// ************** from here on down, app-specific **************  
 	
-	VulkanLogicalDevice(
+	VulkanDevice(
 		VulkanPhysicalDevice const * const physicalDevice,
 		VulkanSurface const * const surface,
 		std::vector<char const *> const & deviceExtensions,
@@ -828,7 +828,7 @@ CREATE_CREATER(Sampler, )
 struct VulkanRenderPass : public VulkanHandle<VkRenderPass> {
 protected:
 	//held
-	VulkanLogicalDevice const * const device = {};
+	VulkanDevice const * const device = {};
 public:
 	~VulkanRenderPass() {
 		if (handle) vkDestroyRenderPass((*device)(), handle, getAllocator());
@@ -838,7 +838,7 @@ public:
 
 	VulkanRenderPass(
 		VulkanPhysicalDevice const * const physicalDevice,
-		VulkanLogicalDevice const * const device_,
+		VulkanDevice const * const device_,
 		VkFormat swapChainImageFormat
 	) : device(device_) {
 		auto attachments = Common::make_array(
@@ -921,7 +921,7 @@ public:
 	VulkanCommandPool(
 		VulkanPhysicalDevice const * const physicalDevice,
 		VkSurfaceKHR surface,
-		VulkanLogicalDevice const * const device_
+		VulkanDevice const * const device_
 	) : device((*device_)()) {
 		auto queueFamilyIndices = physicalDevice->findQueueFamilies(surface);
 		auto poolInfo = VkCommandPoolCreateInfo{
@@ -941,7 +941,7 @@ protected:
 	//owns
 	VkDeviceMemory memory = {};
 	//holds
-	VulkanLogicalDevice const * device = {};
+	VulkanDevice const * device = {};
 public:
 	auto getMemory() const { return ASSERTHANDLE(memory); }
 
@@ -953,7 +953,7 @@ public:
 	VulkanDeviceMemoryParent(
 		Handle handle_,
 		VkDeviceMemory memory_,
-		VulkanLogicalDevice const * const device_
+		VulkanDevice const * const device_
 	) : VulkanHandle<Handle>(handle_),
 		memory(memory_),
 		device(device_)
@@ -979,7 +979,7 @@ struct VulkanDeviceMemoryBuffer : public VulkanDeviceMemoryParent<VkBuffer> {
 	//ctor for VkBuffer's whether they are being ctor'd by staging or by uniforms whatever
 	VulkanDeviceMemoryBuffer(
 		VulkanPhysicalDevice const * const physicalDevice,
-		VulkanLogicalDevice const * const device_,
+		VulkanDevice const * const device_,
 		VkDeviceSize size,
 		VkBufferUsageFlags usage,
 		VkMemoryPropertyFlags properties
@@ -1007,7 +1007,7 @@ struct VulkanDeviceMemoryBuffer : public VulkanDeviceMemoryParent<VkBuffer> {
 	// TODO make a StagingBuffer subclass? 
 	static std::unique_ptr<VulkanDeviceMemoryBuffer> makeFromStaged(
 		VulkanPhysicalDevice const * const physicalDevice,
-		VulkanLogicalDevice const * const device,
+		VulkanDevice const * const device,
 		void const * const srcData,
 		size_t bufferSize
 	) {
@@ -1038,7 +1038,7 @@ public:
 	// requires Handle == VkBuffer
 	static std::unique_ptr<VulkanDeviceMemoryBuffer> makeBufferFromStaged(
 		VulkanPhysicalDevice const * const physicalDevice,
-		VulkanLogicalDevice const * const device,
+		VulkanDevice const * const device,
 		VulkanCommandPool const * const commandPool,
 		void const * const srcData,
 		size_t bufferSize
@@ -1073,7 +1073,7 @@ protected:
 	//copies based on the graphicsQueue
 	// used by makeBufferFromStaged
 	static void copyBuffer(
-		VulkanLogicalDevice const * const device,
+		VulkanDevice const * const device,
 		VulkanCommandPool const * const commandPool,
 		VkBuffer srcBuffer,	//staging VkBuffer
 		Handle dstBuffer,	//dest VkBuffer
@@ -1129,7 +1129,7 @@ public:
 	static std::unique_ptr<VulkanDeviceMemoryImage>
 	makeTextureFromStaged(
 		VulkanPhysicalDevice const * const physicalDevice,
-		VulkanLogicalDevice const * const device,
+		VulkanDevice const * const device,
 		VulkanCommandPool const * const commandPool,
 		void const * const srcData,
 		size_t bufferSize,
@@ -1183,7 +1183,7 @@ public:
 public:
 	static std::unique_ptr<VulkanDeviceMemoryImage> createImage(
 		VulkanPhysicalDevice const * const physicalDevice,
-		VulkanLogicalDevice const * const device,
+		VulkanDevice const * const device,
 		uint32_t width,
 		uint32_t height,
 		VkFormat format,
@@ -1283,7 +1283,7 @@ public:
 	}
 
 	static void copyBufferToImage(
-		VulkanLogicalDevice const * const device,
+		VulkanDevice const * const device,
 		VulkanCommandPool const * const commandPool,
 		VkBuffer buffer,
 		VkImage image,
@@ -1322,7 +1322,7 @@ public:
 	}
 
 	static VkCommandBuffer beginSingleTimeCommands(
-		VulkanLogicalDevice const * const device,
+		VulkanDevice const * const device,
 		VulkanCommandPool const * const commandPool
 	) {
 		auto allocInfo = VkCommandBufferAllocateInfo{
@@ -1346,7 +1346,7 @@ public:
 	}
 
 	static void endSingleTimeCommands(
-		VulkanLogicalDevice const * const device,
+		VulkanDevice const * const device,
 		VulkanCommandPool const * const commandPool,
 		VkCommandBuffer commandBuffer
 	) {
@@ -1371,7 +1371,7 @@ protected:
 	//owned
 	std::unique_ptr<VulkanRenderPass> renderPass;
 	// hold for this class lifespan
-	VulkanLogicalDevice const * const device = {};
+	VulkanDevice const * const device = {};
 
     std::unique_ptr<VulkanDeviceMemoryImage> depthImage;
     VkImageView depthImageView = {};
@@ -1413,7 +1413,7 @@ public:
 	VulkanSwapChain(
 		Tensor::int2 screenSize,
 		VulkanPhysicalDevice const * const physicalDevice,
-		VulkanLogicalDevice const * const device_,
+		VulkanDevice const * const device_,
 		VulkanSurface const * const surface
 	) : device(device_) {
 		auto swapChainSupport = physicalDevice->querySwapChainSupport((*surface)());
@@ -1569,7 +1569,7 @@ protected:
 struct VulkanDescriptorSetLayout : public VulkanHandle<VkDescriptorSetLayout> {
 protected:
 	//held for dtor
-	VulkanLogicalDevice const * const device = {};
+	VulkanDevice const * const device = {};
 public:
 	~VulkanDescriptorSetLayout() {
 		if (handle) {
@@ -1578,7 +1578,7 @@ public:
 	}
 	
 	VulkanDescriptorSetLayout(
-		VulkanLogicalDevice const * const device_
+		VulkanDevice const * const device_
 	) : device(device_) {
 		auto bindings = Common::make_array(
 			VkDescriptorSetLayoutBinding{	//uboLayoutBinding 
@@ -1607,14 +1607,14 @@ public:
 struct VulkanShaderModule : public VulkanHandle<VkShaderModule> {
 protected:
 	//held:
-	VulkanLogicalDevice const * const device = {};
+	VulkanDevice const * const device = {};
 public:
 	~VulkanShaderModule() {
 		if (handle) vkDestroyShaderModule((*device)(), handle, getAllocator());
 	}
 	
 	VulkanShaderModule(
-		VulkanLogicalDevice const * const device_,
+		VulkanDevice const * const device_,
 		std::string const code
 	) : device(device_) {
 		auto createInfo = VkShaderModuleCreateInfo{
@@ -1633,7 +1633,7 @@ protected:
 	std::unique_ptr<VulkanDescriptorSetLayout> descriptorSetLayout;
 	
 	//held:
-	VulkanLogicalDevice const * const device = {};				//held for dtor
+	VulkanDevice const * const device = {};				//held for dtor
 public:
 	VkPipelineLayout getPipelineLayout() const { return ASSERTHANDLE(pipelineLayout); }
 	
@@ -1647,7 +1647,7 @@ public:
 	}
 
 	VulkanGraphicsPipeline(
-		VulkanLogicalDevice const * const device_,
+		VulkanDevice const * const device_,
 		VulkanRenderPass const * const renderPass
 	) : device(device_) {
 		
@@ -1802,7 +1802,7 @@ struct VulkanCommon {
 	std::unique_ptr<VulkanInstance> instance;
 	std::unique_ptr<VulkanDebugMessenger> debug;	// optional
 	std::unique_ptr<VulkanSurface> surface;
-	std::unique_ptr<VulkanLogicalDevice> device;
+	std::unique_ptr<VulkanDevice> device;
 	std::unique_ptr<VulkanSwapChain> swapChain;
 	std::unique_ptr<VulkanGraphicsPipeline> graphicsPipeline;
 	std::unique_ptr<VulkanCommandPool> commandPool;
@@ -1854,7 +1854,7 @@ struct VulkanCommon {
 		surface = std::make_unique<VulkanSurface>(app->getWindow(), instance.get());
 		
 		physicalDevice = std::make_unique<VulkanPhysicalDevice>(instance.get(), (*surface)(), deviceExtensions);
-		device = std::make_unique<VulkanLogicalDevice>(physicalDevice.get(), surface.get(), deviceExtensions, enableValidationLayers);
+		device = std::make_unique<VulkanDevice>(physicalDevice.get(), surface.get(), deviceExtensions, enableValidationLayers);
 		
 		swapChain = std::make_unique<VulkanSwapChain>(
 			app->getScreenSize(),
