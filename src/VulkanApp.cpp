@@ -910,6 +910,65 @@ public:
 	}
 };
 
+struct VulkanCommandBuffer : public VulkanHandle<VkCommandBuffer> {
+	using Super = VulkanHandle<VkCommandBuffer>;
+protected:
+	VulkanDevice const * const device = {};
+	VkCommandPool commandPool = {};
+public:
+	~VulkanCommandBuffer() {
+		if (handle) vkFreeCommandBuffers((*device)(), commandPool, 1, &handle);
+	}
+
+	VulkanCommandBuffer(
+		VkCommandBuffer handle_,
+		VulkanDevice const * const device_,
+		VkCommandPool commandPool_
+	) : Super(handle_),
+		device(device_),
+		commandPool(commandPool_)
+	{}
+};
+
+struct VulkanSingleTimeCommand : public VulkanCommandBuffer {
+	using Super = VulkanCommandBuffer;
+	
+	VulkanSingleTimeCommand(
+		VulkanDevice const * const device_,
+		VkCommandPool commandPool_
+	) : Super({}, device_, commandPool_) 
+	{
+		auto allocInfo = VkCommandBufferAllocateInfo{
+			.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+			.commandPool = commandPool,
+			.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+			.commandBufferCount = 1,
+		};
+
+		vkAllocateCommandBuffers((*device)(), &allocInfo, &handle);
+
+		auto beginInfo = VkCommandBufferBeginInfo{
+			.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+			.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+		};
+
+		vkBeginCommandBuffer(handle, &beginInfo);
+	}
+	
+	~VulkanSingleTimeCommand() {
+		vkEndCommandBuffer(handle);
+
+		auto submitInfo = VkSubmitInfo{
+			.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+			.commandBufferCount = 1,
+			.pCommandBuffers = &handle,
+		};
+
+		vkQueueSubmit((*device->getGraphicsQueue())(), 1, &submitInfo, VK_NULL_HANDLE);
+		vkQueueWaitIdle((*device->getGraphicsQueue())());
+	}
+};
+
 struct VulkanCommandPool : public VulkanHandle<VkCommandPool> {
 protected:
 	//held:
@@ -938,7 +997,7 @@ public:
 		uint32_t width,
 		uint32_t height
 	) const {
-		VkCommandBuffer commandBuffer = beginSingleTimeCommands();
+		VulkanSingleTimeCommand commandBuffer(device, (*this)());
 
 		auto region = VkBufferImageCopy{
 			.bufferOffset = 0,
@@ -958,15 +1017,13 @@ public:
 			},
 		};
 		vkCmdCopyBufferToImage(
-			commandBuffer,
+			commandBuffer(),
 			buffer,
 			image,
 			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 			1,
 			&region
 		);
-
-		endSingleTimeCommands(commandBuffer);
 	}
 
 	void transitionImageLayout(
@@ -975,7 +1032,7 @@ public:
 		VkImageLayout oldLayout,
 		VkImageLayout newLayout
 	) const {
-		VkCommandBuffer commandBuffer = beginSingleTimeCommands();
+		VulkanSingleTimeCommand commandBuffer(device, (*this)());
 
 		auto barrier = VkImageMemoryBarrier{
 			.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
@@ -1013,55 +1070,13 @@ public:
 		}
 
 		vkCmdPipelineBarrier(
-			commandBuffer,
+			commandBuffer(),
 			sourceStage, destinationStage,
 			0,
 			0, nullptr,
 			0, nullptr,
 			1, &barrier
 		);
-
-		endSingleTimeCommands(commandBuffer);
-	}
-
-
-protected:
-	VkCommandBuffer beginSingleTimeCommands() const {
-		auto allocInfo = VkCommandBufferAllocateInfo{
-			.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-			.commandPool = (*this)(),
-			.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-			.commandBufferCount = 1,
-		};
-
-		auto commandBuffer = VkCommandBuffer{};
-		vkAllocateCommandBuffers((*device)(), &allocInfo, &commandBuffer);
-
-		auto beginInfo = VkCommandBufferBeginInfo{
-			.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-			.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-		};
-
-		vkBeginCommandBuffer(commandBuffer, &beginInfo);
-
-		return commandBuffer;
-	}
-
-	void endSingleTimeCommands(
-		VkCommandBuffer commandBuffer
-	) const {
-		vkEndCommandBuffer(commandBuffer);
-
-		auto submitInfo = VkSubmitInfo{
-			.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-			.commandBufferCount = 1,
-			.pCommandBuffers = &commandBuffer,
-		};
-
-		vkQueueSubmit((*device->getGraphicsQueue())(), 1, &submitInfo, VK_NULL_HANDLE);
-		vkQueueWaitIdle((*device->getGraphicsQueue())());
-
-		vkFreeCommandBuffers((*device)(), (*this)(), 1, &commandBuffer);
 	}
 };
 
