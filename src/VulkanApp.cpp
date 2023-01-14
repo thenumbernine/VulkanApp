@@ -93,15 +93,38 @@ namespace Common {
 
 //https://stackoverflow.com/questions/26351587/how-to-create-stdarray-with-initialization-list-without-providing-size-directl
 template <typename... T>
-constexpr auto make_array(T&&... values) ->
-	std::array<
-		typename std::decay<
-			typename std::common_type<T...>::type>::type,
-		sizeof...(T)> {
+constexpr auto make_array(T&&... values)
+-> std::array<
+	typename std::decay<
+		typename std::common_type<T...>::type
+	>::type,
+	sizeof...(T)
+> {
 	return std::array<
 		typename std::decay<
-			typename std::common_type<T...>::type>::type,
-		sizeof...(T)>{std::forward<T>(values)...};
+			typename std::common_type<T...>::type
+		>::type,
+		sizeof...(T)
+	>{std::forward<T>(values)...};
+}
+
+/*
+for when you don't want to init every field of a POD struct
+but C++ doesn't use named ctor of POD
+so just pass it a list of fields you want to init
+*/
+template<typename T, typename... Args>
+constexpr auto makeStructNamed(
+	std::tuple<Args...> const & fields
+) {
+	T result = {};
+	Common::TupleForEach(fields, [&result](auto x, size_t i) constexpr -> bool {
+		auto k = std::get<0>(x);
+		auto v = std::get<1>(x);
+		result.*k = v;
+		return false;
+	});
+	return result;
 }
 
 }
@@ -351,6 +374,7 @@ protected:
 		::SDLApp::SDLApp const * const app,
 		bool const enableValidationLayers
 	) {
+		// TODO vulkanEnumSDL ?  or just test the return-type for the SDL return type? (assuming it's not the same as the Vulkan return type ...)
 		uint32_t extensionCount = {};
 		SDL_VULKAN_SAFE(SDL_Vulkan_GetInstanceExtensions, app->getWindow(), &extensionCount, nullptr);
 		std::vector<char const *> extensions(extensionCount);
@@ -816,14 +840,30 @@ public:
 		colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 		colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
-		VkAttachmentReference colorAttachmentRef = {};
-		colorAttachmentRef.attachment = 0;
-		colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+		auto colorAttachmentRefs = Common::make_array(
+			VkAttachmentReference{
+				0,											//attachment 
+				VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,	//layout 
+			}
+		);
 
-		VkSubpassDescription subpass = {};
-		subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-		subpass.colorAttachmentCount = 1;
-		subpass.pColorAttachments = &colorAttachmentRef;
+		auto subpasses = Common::make_array<VkSubpassDescription>(
+#if 1	
+			VkSubpassDescription{
+				0,										//flags
+				VK_PIPELINE_BIND_POINT_GRAPHICS,		//pipelineBindPoint
+				0,										//inputAttachmentCount
+				nullptr,								//pInputAttachments
+				(uint32_t)colorAttachmentRefs.size(),	//colorAttachmentCount
+				colorAttachmentRefs.data(),				//pColorAttachments
+				nullptr,								//pResolveAttachments
+				nullptr,								//pDepthStencilAttachment
+				0,										//preserveAttachmentCount
+				nullptr,								//pPreserveAttachments
+			}
+#else
+#endif
+		);
 
 		VkSubpassDependency dependency = {};
 		dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
@@ -837,8 +877,8 @@ public:
 		renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
 		renderPassInfo.attachmentCount = 1;
 		renderPassInfo.pAttachments = &colorAttachment;
-		renderPassInfo.subpassCount = 1;
-		renderPassInfo.pSubpasses = &subpass;
+		renderPassInfo.subpassCount = (uint32_t)subpasses.size();
+		renderPassInfo.pSubpasses = subpasses.data();
 		renderPassInfo.dependencyCount = 1;
 		renderPassInfo.pDependencies = &dependency;
 		handle = device_->createRenderPass(&renderPassInfo);
@@ -1030,16 +1070,14 @@ public:
 				1,											//descriptorCount 
 				VK_SHADER_STAGE_VERTEX_BIT,					//stageFlags 
 				nullptr,									//pImmutableSamplers 
-			}
-#if 0
-			,VkDescriptorSetLayoutBinding{	//samplerLayoutBinding 
+			},
+			VkDescriptorSetLayoutBinding{	//samplerLayoutBinding 
 				1,											//binding 
 				VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,	//descriptorType 
 				1,											//descriptorCount 
 				VK_SHADER_STAGE_FRAGMENT_BIT,				//stageFlags 
 				nullptr,									//pImmutableSamplers 
 			}
-#endif
 		);
 		VkDescriptorSetLayoutCreateInfo layoutInfo = {};
 		layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -2037,13 +2075,11 @@ protected:
 			VkDescriptorPoolSize{
 				VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,				//type 
 				static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT),	//descriptorCount 
+			},
+			VkDescriptorPoolSize{
+				VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,		//type 
+				static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT),	//descriptorCount 
 			}
-#if 0
-			,VkDescriptorPoolSize{
-				VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;		//type 
-				static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);	//descriptorCount 
-			}
-#endif
 		);
 
 		VkDescriptorPoolCreateInfo poolInfo = {};
@@ -2070,7 +2106,13 @@ protected:
 			bufferInfo.offset = 0;
 			bufferInfo.range = sizeof(UniformBufferObject);
 
-			std::array<VkWriteDescriptorSet, 1> descriptorWrites = Common::make_array(
+			VkDescriptorImageInfo imageInfo = {};
+			imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+			imageInfo.imageView = textureImageView;
+			imageInfo.sampler = textureSampler;
+
+
+			auto descriptorWrites = Common::make_array<VkWriteDescriptorSet>(
 				VkWriteDescriptorSet{
 					VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,		//sType 
 					nullptr,									//pNext 
@@ -2082,9 +2124,8 @@ protected:
 					nullptr,									//pImageInfo 
 					&bufferInfo,								//pBufferInfo 
 					nullptr,									//pTexelBufferView 
-				}
-#if 0
-				,VkWriteDescriptorSet{
+				},
+				VkWriteDescriptorSet{
 					VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,		//sType 
 					nullptr,									//pNext 
 					descriptorSets[i],							//dstSet 
@@ -2096,7 +2137,6 @@ protected:
 					nullptr,									//pBufferInfo 
 					nullptr,									//pTexelBufferView 
 				}
-#endif
 			);
 			vkUpdateDescriptorSets((*device)(), static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
 		}
@@ -2133,7 +2173,7 @@ protected:
 // trying to find whats wrong with using ubo matrices...
 // my matrices are transposed memory layout from opengl (I think?)
 #if 1
-//ubo.model = ubo.model.transpose();
+ubo.model = ubo.model.transpose();
 //ubo.view = ubo.view.transpose();
 //ubo.proj = ubo.proj.transpose();
 #endif
