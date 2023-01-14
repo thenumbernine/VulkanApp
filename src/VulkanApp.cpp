@@ -88,8 +88,25 @@ auto assertHandle(auto x, char const * where) {
 }
 #define ASSERTHANDLE(x) assertHandle(x, FILE_AND_LINE)
 
-// TODO put this somewhere maybe
+//TODO put this somewhere
+namespace Common {
 
+//https://stackoverflow.com/questions/26351587/how-to-create-stdarray-with-initialization-list-without-providing-size-directl
+template <typename... T>
+constexpr auto make_array(T&&... values) ->
+	std::array<
+		typename std::decay<
+			typename std::common_type<T...>::type>::type,
+		sizeof...(T)> {
+	return std::array<
+		typename std::decay<
+			typename std::common_type<T...>::type>::type,
+		sizeof...(T)>{std::forward<T>(values)...};
+}
+
+}
+
+// TODO put this somewhere maybe
 namespace Tensor {
 
 //glRotatef
@@ -170,11 +187,11 @@ struct Vertex {
 		};
 	}
 
-	// TODO instead put fields = tuple of member refs
-	// then have a method for 'fields-to-binding-descriptions'
-	// and a method for 'fields-to-attribute-descriptions'
 	static auto getAttributeDescriptions() {
-		return std::array<VkVertexInputAttributeDescription, 3>{
+		return Common::make_array<VkVertexInputAttributeDescription>(
+			// TODO instead put fields = tuple of member refs
+			// then have a method for 'fields-to-binding-descriptions'
+			// and a method for 'fields-to-attribute-descriptions'
 			VkVertexInputAttributeDescription{
 				0,							//location
 				0,							//binding
@@ -192,8 +209,8 @@ struct Vertex {
 				0,
 				VK_FORMAT_R32G32_SFLOAT,
 				offsetof(Vertex, texCoord),
-			},
-		};
+			}
+		);
 	}
 };
 
@@ -202,6 +219,7 @@ struct UniformBufferObject {
 	alignas(16) Tensor::float4x4 view;
 	alignas(16) Tensor::float4x4 proj;
 };
+static_assert(sizeof(UniformBufferObject) == 4 * 4 * sizeof(float) * 3);
 
 std::vector<Vertex> const vertices = {
 	{{-0.5f, -0.5f}, {1, 0, 0}, {1, 0},},
@@ -256,7 +274,7 @@ struct VulkanInstance : public VulkanHandle<VkInstance> {
 	~VulkanInstance() {
 		if (handle) vkDestroyInstance(handle, getAllocator());
 	}
-	
+
 	PFN_vkVoidFunction getProcAddr(char const * const name) const {
 		return vkGetInstanceProcAddr((*this)(), name);
 	}
@@ -284,7 +302,6 @@ struct VulkanInstance : public VulkanHandle<VkInstance> {
 				NAME_PAIR(vkEnumerateInstanceLayerProperties)
 			);
 #else
-#define EMPTY			
 			std::vector<VkLayerProperties> availableLayers = VULKAN_ENUM_SAFE(
 				VkLayerProperties,
 				vkEnumerateInstanceLayerProperties,
@@ -368,8 +385,8 @@ protected:
 public:
 	~VulkanDebugMessenger() {
 		// call destroy function
-		if (vkDestroyDebugUtilsMessengerEXT && (*this)()) {
-			vkDestroyDebugUtilsMessengerEXT((*instance)(), (*this)(), getAllocator());
+		if (vkDestroyDebugUtilsMessengerEXT && handle) {
+			vkDestroyDebugUtilsMessengerEXT((*instance)(), handle, getAllocator());
 		}
 	}
 
@@ -421,10 +438,9 @@ public:
 };
 
 struct VulkanPhysicalDevice : public VulkanHandle<VkPhysicalDevice> {
-	VulkanPhysicalDevice(VkPhysicalDevice handle_)
-	: VulkanHandle<VkPhysicalDevice>(handle_) 
-	{}
-
+	using Super = VulkanHandle<VkPhysicalDevice>;
+	using Super::Super;
+	
 	VkPhysicalDeviceProperties getProperties() const {
 		VkPhysicalDeviceProperties physDevProps = {};
 		vkGetPhysicalDeviceProperties((*this)(), &physDevProps);
@@ -496,7 +512,7 @@ struct VulkanPhysicalDevice : public VulkanHandle<VkPhysicalDevice> {
 
 	VkPhysicalDeviceFeatures getFeatures() const {
 		VkPhysicalDeviceFeatures features = {};
-        vkGetPhysicalDeviceFeatures((*this)(), &features);
+		vkGetPhysicalDeviceFeatures((*this)(), &features);
 		return features;
 	}
 
@@ -601,7 +617,7 @@ protected:
 			auto swapChainSupport = querySwapChainSupport(surface);
 			swapChainAdequate = !swapChainSupport.formats.empty() && !swapChainSupport.presentModes.empty();
 		}
-        
+
 		VkPhysicalDeviceFeatures features = getFeatures();
 
 		return indices.isComplete()
@@ -677,7 +693,7 @@ public:
 	~VulkanLogicalDevice() {
 		if (handle) vkDestroyDevice(handle, getAllocator());
 	}
-
+	
 	// should this return a handle or an object?
 	// I'll return a handle like the create*** functions
 	VulkanQueue getQueue(
@@ -723,7 +739,7 @@ CREATE_CREATER(Buffer, )
 		VULKAN_SAFE(vkCreateGraphicsPipelines, (*this)(), pipelineCache, numCreateInfo, createInfo, allocator, &result);
 		return result;
 	}
-
+	
 	void waitIdle() const {
 		VULKAN_SAFE(vkDeviceWaitIdle, (*this)());
 	}
@@ -753,7 +769,7 @@ CREATE_CREATER(Buffer, )
 		}
 		
 		VkPhysicalDeviceFeatures deviceFeatures = {}; // empty
-        deviceFeatures.samplerAnisotropy = VK_TRUE;
+		deviceFeatures.samplerAnisotropy = VK_TRUE;
 
 		VkDeviceCreateInfo createInfo = {};
 		createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -843,18 +859,18 @@ public:
 	std::vector<VkImage> images;
 	std::vector<VkImageView> imageViews;
 	std::vector<VkFramebuffer> framebuffers;
-
+	
 public:
 	VulkanRenderPass const * const getRenderPass() const {
 		return renderPass.get();
 	}
 
 	~VulkanSwapChain() {
-		for (auto const & framebuffer : framebuffers) {
+		for (auto framebuffer : framebuffers) {
 			vkDestroyFramebuffer((*device)(), framebuffer, getAllocator());
 		}
 		renderPass = nullptr;
-		for (auto const & imageView : imageViews) {
+		for (auto imageView : imageViews) {
 			vkDestroyImageView((*device)(), imageView, getAllocator());
 		}
 		if (handle) vkDestroySwapchainKHR((*device)(), handle, getAllocator());
@@ -934,19 +950,19 @@ public:
 	}
 
 	VkImageView createImageView(VkImage image, VkFormat format) {
-	    VkImageViewCreateInfo viewInfo = {};
-        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        viewInfo.image = image;
-        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        viewInfo.format = format;
-        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        viewInfo.subresourceRange.baseMipLevel = 0;
-        viewInfo.subresourceRange.levelCount = 1;
-        viewInfo.subresourceRange.baseArrayLayer = 0;
-        viewInfo.subresourceRange.layerCount = 1;
-        VkImageView imageView = {};
-        VULKAN_SAFE(vkCreateImageView, (*device)(), &viewInfo, getAllocator(), &imageView);
-        return imageView;
+		VkImageViewCreateInfo viewInfo = {};
+		viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+		viewInfo.image = image;
+		viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+		viewInfo.format = format;
+		viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		viewInfo.subresourceRange.baseMipLevel = 0;
+		viewInfo.subresourceRange.levelCount = 1;
+		viewInfo.subresourceRange.baseArrayLayer = 0;
+		viewInfo.subresourceRange.layerCount = 1;
+		VkImageView imageView = {};
+		VULKAN_SAFE(vkCreateImageView, (*device)(), &viewInfo, getAllocator(), &imageView);
+		return imageView;
 	}
 
 protected:
@@ -1007,25 +1023,28 @@ public:
 	VulkanDescriptorSetLayout(
 		VulkanLogicalDevice const * const device_
 	) : device(device_) {
-		VkDescriptorSetLayoutBinding uboLayoutBinding = {};
-		uboLayoutBinding.binding = 0;
-		uboLayoutBinding.descriptorCount = 1;
-		uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-		uboLayoutBinding.pImmutableSamplers = nullptr;
-		uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-
-        VkDescriptorSetLayoutBinding samplerLayoutBinding = {};
-        samplerLayoutBinding.binding = 1;
-        samplerLayoutBinding.descriptorCount = 1;
-        samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        samplerLayoutBinding.pImmutableSamplers = nullptr;
-        samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
-        std::array<VkDescriptorSetLayoutBinding, 2> bindings = {uboLayoutBinding, samplerLayoutBinding};
+		auto bindings = Common::make_array<VkDescriptorSetLayoutBinding>(
+			VkDescriptorSetLayoutBinding{	//uboLayoutBinding
+				0,											//binding
+				VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,			//descriptorType 
+				1,											//descriptorCount 
+				VK_SHADER_STAGE_VERTEX_BIT,					//stageFlags 
+				nullptr,									//pImmutableSamplers 
+			}
+#if 0
+			,VkDescriptorSetLayoutBinding{	//samplerLayoutBinding 
+				1,											//binding 
+				VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,	//descriptorType 
+				1,											//descriptorCount 
+				VK_SHADER_STAGE_FRAGMENT_BIT,				//stageFlags 
+				nullptr,									//pImmutableSamplers 
+			}
+#endif
+		);
 		VkDescriptorSetLayoutCreateInfo layoutInfo = {};
 		layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
-        layoutInfo.pBindings = bindings.data();
+		layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+		layoutInfo.pBindings = bindings.data();
 		handle = device_->createDescriptorSetLayout(&layoutInfo);
 	}
 };
@@ -1130,9 +1149,13 @@ public:
 		rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
 		rasterizer.lineWidth = 1;
 		rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
-		//rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+#if 0	//this is what lesson 22 says	to change things to (for use with future tutorials)
 		// this was changed in lesson 23 ...
+		// I bet once I get transforms working it'll matter
 		rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+#else
+		rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+#endif
 		rasterizer.depthBiasEnable = VK_FALSE;
 
 		VkPipelineMultisampleStateCreateInfo multisampling = {};
@@ -1221,8 +1244,9 @@ public:
 
 // methods common to VkBuffer and VkImage
 template<typename Handle>
-struct VulkanDeviceMemoryParent : public VulkanHandle<Handle> {
+struct VulkanDeviceMemoryParent  : public VulkanHandle<Handle> {
 	using Super = VulkanHandle<Handle>;
+protected:
 	//owns
 	VkDeviceMemory memory = {};
 	//holds
@@ -1269,7 +1293,7 @@ struct VulkanDeviceMemoryBuffer : public VulkanDeviceMemoryParent<VkBuffer> {
 		VkBufferUsageFlags usage,
 		VkMemoryPropertyFlags properties
 	) : Super({}, {}, device_) {
-		
+
 		VkBufferCreateInfo bufferInfo = {};
 		bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
 		bufferInfo.size = size;
@@ -1417,7 +1441,7 @@ public:
 		int texWidth,
 		int texHeight
 	) {
-		std::unique_ptr<VulkanDeviceMemoryBuffer> stagingBuffer 
+		std::unique_ptr<VulkanDeviceMemoryBuffer> stagingBuffer
 		= VulkanDeviceMemoryBuffer::makeFromStaged(
 			physicalDevice,
 			device,
@@ -1649,14 +1673,14 @@ struct VulkanCommon {
 	std::unique_ptr<VulkanDeviceMemoryBuffer> vertexBuffer;
 	std::unique_ptr<VulkanDeviceMemoryBuffer> indexBuffer;
 	std::unique_ptr<VulkanDeviceMemoryImage> textureImage;
-    
+
 	VkImageView textureImageView;
-    VkSampler textureSampler;
+	VkSampler textureSampler;
 
 	// hmm should the map be a field?
 	std::vector<std::unique_ptr<VulkanDeviceMemoryBuffer>> uniformBuffers;
 	std::vector<void*> uniformBuffersMapped;
-
+	
 	VkDescriptorPool descriptorPool = {};
 	std::vector<VkDescriptorSet> descriptorSets;
 
@@ -1713,10 +1737,10 @@ struct VulkanCommon {
 			(*surface)(),
 			device.get()
 		);
-		
+	
 		createTextureImage();
-        createTextureImageView();
-        createTextureSampler();
+		createTextureImageView();
+		createTextureSampler();
 		
 		initVertexBuffer();
 		initIndexBuffer();
@@ -1758,11 +1782,11 @@ public:
 		uniformBuffers.clear();
 		indexBuffer = nullptr;
 		vertexBuffer = nullptr;
-
+		
 		vkDestroyDescriptorPool((*device)(), descriptorPool, nullptr);
-	    
+
 		vkDestroySampler((*device)(), textureSampler, nullptr);
-        vkDestroyImageView((*device)(), textureImageView, nullptr);
+		vkDestroyImageView((*device)(), textureImageView, nullptr);
 		textureImage = nullptr;
 
 		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
@@ -1788,7 +1812,7 @@ protected:
 		int texWidth = image->getSize().x;
 		int texHeight = image->getSize().y;
 		int texBPP = image->getBitsPerPixel() >> 3;
-		int desiredBPP = 4;
+			int desiredBPP = 4;
 		if (texBPP != desiredBPP) {
 			//resample
 			auto newimage = std::make_shared<Image::Image>(image->getSize(), nullptr, desiredBPP);
@@ -1806,7 +1830,7 @@ protected:
 		}
 		char * srcData = image->getData();
 		VkDeviceSize bufferSize = texWidth * texHeight * texBPP;
-		
+	
 		textureImage = VulkanDeviceMemoryImage::makeTextureFromStaged(
 			physicalDevice.get(),
 			device.get(),
@@ -1818,31 +1842,31 @@ protected:
 		);
 	}
 
-    void createTextureImageView() {
-        textureImageView = swapChain->createImageView((*textureImage)(), VK_FORMAT_R8G8B8A8_SRGB);
-    }
+	void createTextureImageView() {
+		textureImageView = swapChain->createImageView((*textureImage)(), VK_FORMAT_R8G8B8A8_SRGB);
+	}
 
-    void createTextureSampler() {
-        VkPhysicalDeviceProperties properties = {};
-        vkGetPhysicalDeviceProperties((*physicalDevice)(), &properties);
+	void createTextureSampler() {
+		VkPhysicalDeviceProperties properties = {};
+		vkGetPhysicalDeviceProperties((*physicalDevice)(), &properties);
 
-        VkSamplerCreateInfo samplerInfo = {};
-        samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-        samplerInfo.magFilter = VK_FILTER_LINEAR;
-        samplerInfo.minFilter = VK_FILTER_LINEAR;
-        samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        samplerInfo.anisotropyEnable = VK_TRUE;
-        samplerInfo.maxAnisotropy = properties.limits.maxSamplerAnisotropy;
-        samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
-        samplerInfo.unnormalizedCoordinates = VK_FALSE;
-        samplerInfo.compareEnable = VK_FALSE;
-        samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
-        samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+		VkSamplerCreateInfo samplerInfo = {};
+		samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+		samplerInfo.magFilter = VK_FILTER_LINEAR;
+		samplerInfo.minFilter = VK_FILTER_LINEAR;
+		samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+		samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+		samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+		samplerInfo.anisotropyEnable = VK_TRUE;
+		samplerInfo.maxAnisotropy = properties.limits.maxSamplerAnisotropy;
+		samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+		samplerInfo.unnormalizedCoordinates = VK_FALSE;
+		samplerInfo.compareEnable = VK_FALSE;
+		samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
+		samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
 
-        VULKAN_SAFE(vkCreateSampler, (*device)(), &samplerInfo, nullptr, &textureSampler);
-    }
+		VULKAN_SAFE(vkCreateSampler, (*device)(), &samplerInfo, nullptr, &textureSampler);
+	}
 
 
 	void recreateSwapChain() {
@@ -1981,7 +2005,6 @@ protected:
 				nullptr
 			);
 
-// hmm when I use uniforms it is crashing here ...
 			vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
 		}
 
@@ -2010,16 +2033,23 @@ protected:
 	}
 
 	void createDescriptorPool() {
-        std::array<VkDescriptorPoolSize, 2> poolSizes = {};
-        poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        poolSizes[0].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
-        poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        poolSizes[1].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+		auto poolSizes = Common::make_array<VkDescriptorPoolSize>(
+			VkDescriptorPoolSize{
+				VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,				//type 
+				static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT),	//descriptorCount 
+			}
+#if 0
+			,VkDescriptorPoolSize{
+				VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;		//type 
+				static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);	//descriptorCount 
+			}
+#endif
+		);
 
 		VkDescriptorPoolCreateInfo poolInfo = {};
 		poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
-        poolInfo.pPoolSizes = poolSizes.data();
+		poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+		poolInfo.pPoolSizes = poolSizes.data();
 		poolInfo.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
 		VULKAN_SAFE(vkCreateDescriptorPool, (*device)(), &poolInfo, nullptr, &descriptorPool);
 	}
@@ -2040,30 +2070,35 @@ protected:
 			bufferInfo.offset = 0;
 			bufferInfo.range = sizeof(UniformBufferObject);
 
-            VkDescriptorImageInfo imageInfo = {};
-            imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            imageInfo.imageView = textureImageView;
-            imageInfo.sampler = textureSampler;
-
-            std::array<VkWriteDescriptorSet, 2> descriptorWrites = {};
-		
-            descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            descriptorWrites[0].dstSet = descriptorSets[i];
-            descriptorWrites[0].dstBinding = 0;
-            descriptorWrites[0].dstArrayElement = 0;
-            descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            descriptorWrites[0].descriptorCount = 1;
-            descriptorWrites[0].pBufferInfo = &bufferInfo;
-
-            descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            descriptorWrites[1].dstSet = descriptorSets[i];
-            descriptorWrites[1].dstBinding = 1;
-            descriptorWrites[1].dstArrayElement = 0;
-            descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            descriptorWrites[1].descriptorCount = 1;
-            descriptorWrites[1].pImageInfo = &imageInfo;
-
-            vkUpdateDescriptorSets((*device)(), static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
+			std::array<VkWriteDescriptorSet, 1> descriptorWrites = Common::make_array(
+				VkWriteDescriptorSet{
+					VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,		//sType 
+					nullptr,									//pNext 
+					descriptorSets[i],							//dstSet 
+					0,											//dstBinding 
+					0,											//dstArrayElement 
+					1,											//descriptorCount 
+					VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,			//descriptorType 
+					nullptr,									//pImageInfo 
+					&bufferInfo,								//pBufferInfo 
+					nullptr,									//pTexelBufferView 
+				}
+#if 0
+				,VkWriteDescriptorSet{
+					VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,		//sType 
+					nullptr,									//pNext 
+					descriptorSets[i],							//dstSet 
+					1,											//dstBinding 
+					0,											//dstArrayElement 
+					1,											//descriptorCount 
+					VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,	//descriptorType 
+					&imageInfo,									//pImageInfo 
+					nullptr,									//pBufferInfo 
+					nullptr,									//pTexelBufferView 
+				}
+#endif
+			);
+			vkUpdateDescriptorSets((*device)(), static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
 		}
 	}
 
@@ -2094,10 +2129,19 @@ protected:
 		);
 		ubo.proj[1][1] *= -1;
 
-//TODO FIXME
-ubo.model = Tensor::float4i4(1); 
-ubo.view = Tensor::float4i4(1); 
-ubo.proj = Tensor::float4i4(1); 
+
+// trying to find whats wrong with using ubo matrices...
+// my matrices are transposed memory layout from opengl (I think?)
+#if 1
+//ubo.model = ubo.model.transpose();
+//ubo.view = ubo.view.transpose();
+//ubo.proj = ubo.proj.transpose();
+#endif
+#if 1
+//ubo.model = Tensor::float4i4(1);	// works
+//ubo.view = Tensor::float4i4(1);	// hmm works but incorrect?
+ubo.proj = Tensor::float4i4(1);	// this has bad data
+#endif
 
 		memcpy(uniformBuffersMapped[currentFrame_], &ubo, sizeof(ubo));
 	}
