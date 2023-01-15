@@ -299,7 +299,7 @@ public:
 
 	Wrapper(Handle const handle_)
 	: handle(handle_) {}
-	
+#if 1
 	Wrapper(Wrapper<Handle, Allocator> && o)
 	: handle(o.handle) {
 		o.handle = {};
@@ -311,8 +311,20 @@ public:
 		}
 		return *this;
 	}
+	Wrapper(Wrapper<Handle, Allocator> & o)
+	: handle(o.handle) {
+		o.handle = {};
+	}
+	Wrapper<Handle, Allocator> & operator=(Wrapper<Handle, Allocator> & o) {
+		if (this != &o) {
+			handle = o.handle;
+			o.handle = {};
+		}
+		return *this;
+	}
 	Wrapper(Wrapper<Handle, Allocator> const & o) = delete;
 	Wrapper<Handle, Allocator> & operator=(Wrapper<Handle, Allocator> const & o) = delete;
+#endif
 
 	Handle const & operator()() const { return ASSERTHANDLE(handle); }
 	Handle operator()() { return ASSERTHANDLE(handle); }
@@ -352,6 +364,17 @@ struct VulkanInstance : public VulkanHandle<VkInstance> {
 		o.handle = {};
 	}
 	VulkanInstance & operator=(VulkanInstance && o) {
+		if (this != &o) {
+			handle = o.handle;
+			o.handle = {};
+		}
+		return *this;
+	}
+	VulkanInstance(VulkanInstance & o)
+	: Super(o.handle) {
+		o.handle = {};
+	}
+	VulkanInstance & operator=(VulkanInstance & o) {
 		if (this != &o) {
 			handle = o.handle;
 			o.handle = {};
@@ -644,6 +667,17 @@ struct ThisVulkanInstance : public VulkanInstance {
 		o.handle = {};
 	}
 	ThisVulkanInstance & operator=(ThisVulkanInstance && o) {
+		if (this != &o) {
+			handle = o.handle;
+			o.handle = {};
+		}
+		return *this;
+	}
+	ThisVulkanInstance(ThisVulkanInstance & o)
+	: Super(o.handle) {
+		o.handle = {};
+	}
+	ThisVulkanInstance & operator=(ThisVulkanInstance & o) {
 		if (this != &o) {
 			handle = o.handle;
 			o.handle = {};
@@ -1183,6 +1217,17 @@ public:
 		}
 		return *this;
 	}
+	VulkanBuffer(VulkanBuffer & o)
+	: Super(o.handle) {
+		o.handle = {};
+	}
+	VulkanBuffer & operator=(VulkanBuffer & o) {
+		if (this != &o) {
+			handle = o.handle;
+			o.handle = {};
+		}
+		return *this;
+	}
 	VulkanBuffer(VulkanBuffer const & o) = delete;
 	VulkanBuffer & operator=(VulkanBuffer const & o) = delete;
 #endif
@@ -1200,7 +1245,6 @@ public:
 	) : Super(device_->createBuffer(&info, getAllocator())),
 		device(device_)
 	{}
-
 
 	auto getMemoryRequirements() const {
 		auto result = VkMemoryRequirements{};
@@ -1253,6 +1297,17 @@ public:
 		}
 		return *this;
 	}
+	VulkanDeviceMemory(VulkanDeviceMemory & o)
+	: Super(o.handle) {
+		o.handle = {};
+	}
+	VulkanDeviceMemory & operator=(VulkanDeviceMemory & o) {
+		if (this != &o) {
+			handle = o.handle;
+			o.handle = {};
+		}
+		return *this;
+	}
 	VulkanDeviceMemory(VulkanDeviceMemory const & o) = delete;
 	VulkanDeviceMemory & operator=(VulkanDeviceMemory const & o) = delete;
 #endif
@@ -1296,6 +1351,17 @@ public:
 		o.handle = {};
 	}
 	VulkanImage & operator=(VulkanImage && o) {
+		if (this != &o) {
+			handle = o.handle;
+			o.handle = {};
+		}
+		return *this;
+	}
+	VulkanImage(VulkanImage & o)
+	: Super(o.handle) {
+		o.handle = {};
+	}
+	VulkanImage & operator=(VulkanImage & o) {
 		if (this != &o) {
 			handle = o.handle;
 			o.handle = {};
@@ -1390,6 +1456,17 @@ public:
 		o.handle = {};
 	}
 	VulkanCommandBuffer & operator=(VulkanCommandBuffer && o) {
+		if (this != &o) {
+			handle = o.handle;
+			o.handle = {};
+		}
+		return *this;
+	}
+	VulkanCommandBuffer(VulkanCommandBuffer & o)
+	: Super(o.handle) {
+		o.handle = {};
+	}
+	VulkanCommandBuffer & operator=(VulkanCommandBuffer & o) {
 		if (this != &o) {
 			handle = o.handle;
 			o.handle = {};
@@ -1810,23 +1887,18 @@ struct VulkanDeviceMemoryParent  : public Super_ {
 	using Super = Super_;
 protected:
 	//owns
-	VkDeviceMemory memory = {};
+	VulkanDeviceMemory memory;
 	//holds
 	VulkanDevice const * device = {};
 public:
-	auto getMemory() const { return ASSERTHANDLE(memory); }
-
-	~VulkanDeviceMemoryParent() {
-		if (memory) vkFreeMemory((*device)(), memory, Super::getAllocator());
-		//doesn't destroy handle -- that's for the child class to do
-	}
+	VulkanDeviceMemory const & getMemory() const { return memory; }
 
 	VulkanDeviceMemoryParent(
 		Super::Handle handle_,
 		VkDeviceMemory memory_,
 		VulkanDevice const * const device_
 	) : Super(handle_, device_),
-		memory(memory_),
+		memory(memory_, device_),
 		device(device_)
 	{}
 };
@@ -1866,14 +1938,12 @@ struct VulkanDeviceMemoryBuffer : public VulkanDeviceMemoryParent<VulkanBuffer> 
 #endif
 
 		auto memRequirements = Super::getMemoryRequirements();
-		auto allocInfo = VkMemoryAllocateInfo{
+		Super::memory = VulkanDeviceMemory(device, VkMemoryAllocateInfo{
 			.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
 			.allocationSize = memRequirements.size,
 			.memoryTypeIndex = physicalDevice->findMemoryType(memRequirements.memoryTypeBits, properties),
-		};
-		VULKAN_SAFE(vkAllocateMemory, (*Super::device)(), &allocInfo, getAllocator(), &memory);
-
-		bindMemory(Super::memory);
+		});
+		bindMemory(Super::memory());
 	}
 
 	// TODO make a StagingBuffer subclass?
@@ -1894,14 +1964,14 @@ struct VulkanDeviceMemoryBuffer : public VulkanDeviceMemoryParent<VulkanBuffer> 
 		void * dstData = {};
 		vkMapMemory(
 			(*device)(),
-			stagingBuffer->getMemory(),
+			stagingBuffer->getMemory()(),
 			0,
 			bufferSize,
 			0,
 			&dstData
 		);
 		memcpy(dstData, srcData, (size_t)bufferSize);
-		vkUnmapMemory((*device)(), stagingBuffer->getMemory());
+		vkUnmapMemory((*device)(), stagingBuffer->getMemory()());
 
 		return stagingBuffer;
 	}
@@ -3031,7 +3101,7 @@ protected:
 			
 			vkMapMemory(
 				(*device)(),
-				uniformBuffers[i]->getMemory(),
+				uniformBuffers[i]->getMemory()(),
 				0,
 				bufferSize,
 				0,
