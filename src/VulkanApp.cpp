@@ -463,6 +463,8 @@ public:
 struct VulkanPhysicalDevice : public VulkanHandle<VkPhysicalDevice> {
 	using Super = VulkanHandle<VkPhysicalDevice>;
 	using Super::Super;
+
+	// TODO maybe I shouldn't return-by-value the structs ...
 	
 	VkPhysicalDeviceProperties getProperties() const {
 		auto physDevProps = VkPhysicalDeviceProperties{};
@@ -1012,12 +1014,12 @@ struct VulkanSingleTimeCommand : public VulkanCommandBuffer {
 			.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
 			.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
 		};
-		vkBeginCommandBuffer(handle, &beginInfo);
+		VULKAN_SAFE(vkBeginCommandBuffer, handle, &beginInfo);
 		//end part that matches
 	}
 	
 	~VulkanSingleTimeCommand() {
-		vkEndCommandBuffer(handle);
+		VULKAN_SAFE(vkEndCommandBuffer, handle);
 		auto submitInfo = VkSubmitInfo{
 			.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
 			.commandBufferCount = 1,
@@ -1062,7 +1064,7 @@ public:
 		auto copyRegion = VkBufferCopy{
 			.size = size,
 		};
-		vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, &copyRegion);
+		vkCmdCopyBuffer(commandBuffer(), srcBuffer, dstBuffer, 1, &copyRegion);
 	}
 
 	void copyBufferToImage(
@@ -1991,6 +1993,9 @@ protected:
 	uint32_t currentFrame = {};
 	
 	bool framebufferResized = {};
+public:
+	void setFramebufferResized() { framebufferResized = true; }
+protected:
 
 	// used by
 	//	VulkanPhysicalDevice::checkDeviceExtensionSupport
@@ -2427,6 +2432,7 @@ protected:
 
 	void initCommandBuffers() {
 		commandBuffers.resize(maxFramesInFlight);
+		// TODO this matches 'VulkanSingleTimeCommand' ctor
 		auto allocInfo = VkCommandBufferAllocateInfo{
 			.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
 			.commandPool = (*commandPool)(),
@@ -2434,13 +2440,16 @@ protected:
 			.commandBufferCount = (uint32_t)commandBuffers.size(),
 		};
 		VULKAN_SAFE(vkAllocateCommandBuffers, (*device)(), &allocInfo, commandBuffers.data());
+		// end part that matches
 	}
 
 	void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex) {
+		// TODO this part matches VulkanSingleTimeCommand ctor
 		auto beginInfo = VkCommandBufferBeginInfo{
 			.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
 		};
 		VULKAN_SAFE(vkBeginCommandBuffer, commandBuffer, &beginInfo);
+		// end part that matches
 
 		auto clearValues = Common::make_array(
 			VkClearValue{
@@ -2727,7 +2736,7 @@ public:
 			.signalSemaphoreCount = (uint32_t)signalSemaphores.size(),
 			.pSignalSemaphores = signalSemaphores.data(),
 		};
-		queue->submit(1, &submitInfo, inFlightFences[currentFrame]);
+		device->getGraphicsQueue()->submit(1, &submitInfo, inFlightFences[currentFrame]);
 		
 		auto swapChains = Common::make_array<VkSwapchainKHR>(
 			(*swapChain)()
@@ -2754,7 +2763,7 @@ public:
 	}
 public:
 	void loopDone() {
-		vkDeviceWaitIdle((*device)());
+		device->waitIdle();
 	}
 };
 
@@ -2793,7 +2802,7 @@ protected:
 	}
 
 	virtual void onResize() {
-		vk->framebufferResized = true;
+		vk->setFramebufferResized();
 	}
 };
 
