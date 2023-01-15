@@ -1171,7 +1171,7 @@ struct VulkanImage : public VulkanHandle<VkImage> {
 	using Super = VulkanHandle<VkImage>;
 protected:
 	//holds
-	VulkanDevice const * device = {};
+	VulkanDevice const * const device = {};
 public:
 	~VulkanImage() {
 		if (handle) vkDestroyImage((*device)(), handle, getAllocator());
@@ -1183,6 +1183,36 @@ public:
 	) : Super(handle_),
 		device(device_)
 	{}
+};
+
+struct VulkanImageView : public VulkanHandle<VkImageView> {
+	using Super = VulkanHandle<VkImageView>;
+protected:
+	//holds
+	VulkanDevice const * device = {};
+public:
+	~VulkanImageView() {
+		if (handle) vkDestroyImageView((*device)(), handle, getAllocator());
+	}
+
+	//should I put handle first since all subclasses of VulkanHandle have handle-first?
+	// (but not all have device-first)
+	//or should I put device first since all ctors of VulkanImageView have device required (but not necessarily handle) ?
+	VulkanImageView(
+		VkImageView handle_,
+		VulkanDevice const * const device_
+	) : Super(handle_),
+		device(device_)
+	{
+	}
+
+	VulkanImageView(
+		VulkanDevice const * const device_,
+		VkImageViewCreateInfo const createInfo
+	) : device(device_) 
+	{
+		VULKAN_SAFE(vkCreateImageView, (*device)(), &createInfo, getAllocator(), &handle);
+	}
 };
 
 struct VulkanBuffer : public VulkanHandle<VkBuffer> {
@@ -1453,17 +1483,17 @@ protected:
 	VulkanDevice const * const device = {};
 
     std::unique_ptr<VulkanDeviceMemoryImage> depthImage;
-    VkImageView depthImageView = {};
-
-    std::unique_ptr<VulkanDeviceMemoryImage> colorImage;
-    VkImageView colorImageView = {};
+    std::unique_ptr<VulkanImageView> depthImageView;
+    
+	std::unique_ptr<VulkanDeviceMemoryImage> colorImage;
+    std::unique_ptr<VulkanImageView> colorImageView;
 public:
 	VkExtent2D extent = {};
 	
 	// I would combine these into one struct so they can be dtored together
 	// but it seems vulkan wants VkImages linear for its getter?
 	std::vector<VkImage> images;
-	std::vector<VkImageView> imageViews;
+	std::vector<std::unique_ptr<VulkanImageView>> imageViews;
 	std::vector<VkFramebuffer> framebuffers;
 	
 public:
@@ -1472,19 +1502,16 @@ public:
 	}
 
 	~VulkanSwapChain() {
-        vkDestroyImageView((*device)(), depthImageView, getAllocator());
+        depthImageView = nullptr;
         depthImage = nullptr;
-        
-		vkDestroyImageView((*device)(), colorImageView, getAllocator());
+		colorImageView = nullptr;
         colorImage = nullptr;
 		
 		for (auto framebuffer : framebuffers) {
 			vkDestroyFramebuffer((*device)(), framebuffer, getAllocator());
 		}
 		renderPass = nullptr;
-		for (auto imageView : imageViews) {
-			vkDestroyImageView((*device)(), imageView, getAllocator());
-		}
+		imageViews.clear();
 		if (handle) vkDestroySwapchainKHR((*device)(), handle, getAllocator());
 	}
 
@@ -1542,14 +1569,13 @@ public:
 		handle = device_->createSwapchain(&createInfo);
 
 		images = getImages();
-		imageViews.resize(images.size());
 		for (size_t i = 0; i < images.size(); i++) {
-			imageViews[i] = createImageView(
+			imageViews.push_back(createImageView(
 				images[i],
 				surfaceFormat.format,
 				VK_IMAGE_ASPECT_COLOR_BIT,
 				1
-			); 
+			));
 		}
 	
 		renderPass = std::make_unique<VulkanRenderPass>(physicalDevice, device_, surfaceFormat.format);
@@ -1600,9 +1626,9 @@ public:
 		framebuffers.resize(imageViews.size());
 		for (size_t i = 0; i < imageViews.size(); i++) {
 			auto attachments = Common::make_array(
-				colorImageView,
-				depthImageView,
-				imageViews[i]
+				(*colorImageView)(),
+				(*depthImageView)(),
+				(*imageViews[i])()
 			);
 			auto framebufferInfo = VkFramebufferCreateInfo{
 				.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
@@ -1617,12 +1643,13 @@ public:
 		}
 	}
 public:
-	VkImageView createImageView(
+	std::unique_ptr<VulkanImageView> createImageView(
 		VkImage image,
 		VkFormat format,
 		VkImageAspectFlags aspectFlags,
 		uint32_t mipLevels
 	) {
+#if 0		
 		auto viewInfo = VkImageViewCreateInfo{
 			.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
 			.image = image,
@@ -1639,6 +1666,24 @@ public:
 		auto imageView = VkImageView{};
 		VULKAN_SAFE(vkCreateImageView, (*device)(), &viewInfo, getAllocator(), &imageView);
 		return imageView;
+#else
+		return std::make_unique<VulkanImageView>(
+			device,
+			VkImageViewCreateInfo{
+				.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+				.image = image,
+				.viewType = VK_IMAGE_VIEW_TYPE_2D,
+				.format = format,
+				.subresourceRange = {
+					.aspectMask = aspectFlags,
+					.baseMipLevel = 0,
+					.levelCount = mipLevels,
+					.baseArrayLayer = 0,
+					.layerCount = 1,
+				},
+			}
+		);
+#endif
 	}
 
 protected:
@@ -1971,7 +2016,7 @@ protected:
 	uint32_t mipLevels = {};
 	std::unique_ptr<VulkanDeviceMemoryImage> textureImage;
 
-	VkImageView textureImageView = {};
+	std::unique_ptr<VulkanImageView> textureImageView;
 	VkSampler textureSampler = {};
     
 	std::vector<Vertex> vertices;
@@ -2101,7 +2146,7 @@ public:
 		descriptorPool = nullptr;		
 
 		vkDestroySampler((*device)(), textureSampler, nullptr);
-		vkDestroyImageView((*device)(), textureImageView, nullptr);
+		textureImageView = nullptr;
 		textureImage = nullptr;
 
 		for (size_t i = 0; i < maxFramesInFlight; i++) {
@@ -2580,7 +2625,7 @@ protected:
 			};
 			auto imageInfo = VkDescriptorImageInfo{
 				.sampler = textureSampler,
-				.imageView = textureImageView,
+				.imageView = (*textureImageView)(),
 				.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
 			};
 			auto descriptorWrites = Common::make_array(
