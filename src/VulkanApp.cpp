@@ -83,9 +83,17 @@ real degToRad(real x) {
 	return x * (real)(M_PI / 180.);
 }
 
-auto assertHandle(auto x, char const * where) {
+auto & assertHandle(auto & x, char const * where) {
 	if (!x) throw Common::Exception() << "returned an empty handle at " << where;
 	return x;
+}
+auto const & assertHandle(auto const & x, char const * where) {
+	if (!x) throw Common::Exception() << "returned an empty handle at " << where;
+	return x;
+}
+auto && assertHandle(auto && x, char const * where) {
+	if (!x) throw Common::Exception() << "returned an empty handle at " << where;
+	return std::move(x);
 }
 #define ASSERTHANDLE(x) assertHandle(x, FILE_AND_LINE)
 
@@ -273,20 +281,65 @@ struct VulkanAllocator {
 	VkAllocationCallbacks const * getAllocator() const { return allocator; }
 };
 
+namespace vk {
+
 template<
 	typename Handle_,
 	typename Allocator = VulkanNullAllocator
 >
-struct VulkanHandle : public Allocator {
+struct Wrapper : public Allocator {
 	using Handle = Handle_;
 protected:
 	Handle handle = {};
 public:
-	auto operator()() const { return ASSERTHANDLE(handle); }
+	Wrapper() {} 
 
-	VulkanHandle() {} 
-	VulkanHandle(Handle handle_) : handle(handle_) {} 
+//vptr?  dtor?  child class?
+//	~Wrapper() { release(); }
+
+	Wrapper(Handle const & handle_) 
+	: handle(handle_) 
+	{}
+	
+	Wrapper(Wrapper<Handle, Allocator> const & rhs) 
+	: handle(rhs.handle) 
+	{}
+	
+	Wrapper(Wrapper<Handle, Allocator> && rhs) 
+	: handle(rhs.handle) { 
+		rhs.handle = {}; 
+	}
+	
+	Wrapper<Handle, Allocator> & operator=(Wrapper<Handle, Allocator> const & rhs) {
+		if (this != &rhs) {
+			handle = rhs.handle;
+		}
+		return *this;
+	}
+
+	Wrapper<Handle, Allocator> & operator=(Wrapper<Handle, Allocator> && rhs) {
+		if (this != &rhs) {
+			handle = rhs.handle;
+			rhs.handle = {};
+		}
+		return *this;
+	}
+
+	Wrapper<Handle_, Allocator> & operator=(Handle const & rhs) {
+		handle = rhs;
+		return *this;
+	}
+
+	Handle const & operator()() const { return ASSERTHANDLE(handle); }
+	Handle operator()() { return ASSERTHANDLE(handle); }
+	//Handle & operator()() { return ASSERTHANDLE(handle); }
+	//Handle && operator()() { return ASSERTHANDLE(handle); }
 };
+
+}
+
+template<typename... Args>
+using VulkanHandle = vk::Wrapper<Args...>;
 
 
 struct VulkanInstance : public VulkanHandle<VkInstance> {
