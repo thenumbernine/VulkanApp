@@ -135,7 +135,7 @@ _mat<real,4,4> rotate(
 	auto x = q.xAxis();
 	auto y = q.yAxis();
 	auto z = q.zAxis();
-	//which is faster? 
+	//which is faster?
 	// this 4x4 mat mul?
 	// or quat-rotate the col vectors of mq?
 	_mat<real,4,4> mq = {
@@ -235,7 +235,7 @@ struct hash<Tensor::floatN<dim>> {
 	size_t operator()(Tensor::floatN<dim> const & v) const {
 		uint32_t h = {};
 		for (auto x : v) {
-			h ^= hash<uint32_t>()(*(uint32_t const *)&x); 
+			h ^= hash<uint32_t>()(*(uint32_t const *)&x);
 		}
 		return h;
 	}
@@ -292,27 +292,27 @@ struct Wrapper : public Allocator {
 protected:
 	Handle handle = {};
 public:
-	Wrapper() {} 
+	Wrapper() {}
 
 //vptr?  dtor?  child class?
 //	~Wrapper() { release(); }
 
-	Wrapper(Handle const handle_) 
+	Wrapper(Handle const handle_)
 	: handle(handle_) {}
 	
-	Wrapper(Wrapper<Handle, Allocator> && rhs) 
-	: handle(rhs.handle) { 
-		rhs.handle = {}; 
+	Wrapper(Wrapper<Handle, Allocator> && o)
+	: handle(o.handle) {
+		o.handle = {};
 	}
-	Wrapper<Handle, Allocator> & operator=(Wrapper<Handle, Allocator> && rhs) {
-		if (this != &rhs) {
-			handle = rhs.handle;
-			rhs.handle = {};
+	Wrapper<Handle, Allocator> & operator=(Wrapper<Handle, Allocator> && o) {
+		if (this != &o) {
+			handle = o.handle;
+			o.handle = {};
 		}
 		return *this;
 	}
-	Wrapper(Wrapper<Handle, Allocator> const & rhs) = delete;
-	Wrapper<Handle, Allocator> & operator=(Wrapper<Handle, Allocator> const & rhs) = delete;
+	Wrapper(Wrapper<Handle, Allocator> const & o) = delete;
+	Wrapper<Handle, Allocator> & operator=(Wrapper<Handle, Allocator> const & o) = delete;
 
 	Handle const & operator()() const { return ASSERTHANDLE(handle); }
 	Handle operator()() { return ASSERTHANDLE(handle); }
@@ -345,21 +345,21 @@ struct VulkanInstance : public VulkanHandle<VkInstance> {
 	// TODO this is copied from the parent class
 	//  so I could put it in one place by make the parent CRTP and return this
 #if 1
-	VulkanInstance(Handle const handle_) 
+	VulkanInstance(Handle const handle_)
 	: Super(handle_) {}
-	VulkanInstance(VulkanInstance && rhs) 
-	: Super(rhs.handle) { 
-		rhs.handle = {}; 
+	VulkanInstance(VulkanInstance && o)
+	: Super(o.handle) {
+		o.handle = {};
 	}
-	VulkanInstance & operator=(VulkanInstance && rhs) {
-		if (this != &rhs) {
-			handle = rhs.handle;
-			rhs.handle = {};
+	VulkanInstance & operator=(VulkanInstance && o) {
+		if (this != &o) {
+			handle = o.handle;
+			o.handle = {};
 		}
 		return *this;
 	}
-	VulkanInstance(VulkanInstance const & rhs) = delete;
-	VulkanInstance & operator=(VulkanInstance const & rhs) = delete;
+	VulkanInstance(VulkanInstance const & o) = delete;
+	VulkanInstance & operator=(VulkanInstance const & o) = delete;
 #endif
 
 	PFN_vkVoidFunction getProcAddr(char const * const name) const {
@@ -627,7 +627,7 @@ struct VulkanQueue : public VulkanHandle<VkQueue> {
 };
 
 
-// ************** from here on down, app-specific **************  
+// ************** from here on down, app-specific **************
 
 
 // so this doesn't add any fields/methods
@@ -636,25 +636,25 @@ struct ThisVulkanInstance : public VulkanInstance {
 	using Super = VulkanInstance;
 
 	//copied from parent ...
-#if 1	
-	ThisVulkanInstance(Handle const handle_) 
+#if 1
+	ThisVulkanInstance(Handle const handle_)
 	: Super(handle_) {}
-	ThisVulkanInstance(ThisVulkanInstance && rhs) 
-	: Super(rhs.handle) { 
-		rhs.handle = {}; 
+	ThisVulkanInstance(ThisVulkanInstance && o)
+	: Super(o.handle) {
+		o.handle = {};
 	}
-	ThisVulkanInstance & operator=(ThisVulkanInstance && rhs) {
-		if (this != &rhs) {
-			handle = rhs.handle;
-			rhs.handle = {};
+	ThisVulkanInstance & operator=(ThisVulkanInstance && o) {
+		if (this != &o) {
+			handle = o.handle;
+			o.handle = {};
 		}
 		return *this;
 	}
-	ThisVulkanInstance(ThisVulkanInstance const & rhs) = delete;
-	ThisVulkanInstance & operator=(ThisVulkanInstance const & rhs) = delete;
+	ThisVulkanInstance(ThisVulkanInstance const & o) = delete;
+	ThisVulkanInstance & operator=(ThisVulkanInstance const & o) = delete;
 #endif
 
-	// this does result in vkCreateInstance, 
+	// this does result in vkCreateInstance,
 	//  but the way it gest there is very application-specific
 	ThisVulkanInstance(
 		::SDLApp::SDLApp const * const app,
@@ -873,7 +873,7 @@ public:
         );
     }
 
-protected: 
+protected:
 	VkFormat findSupportedFormat(
 		std::vector<VkFormat> const & candidates,
 		VkImageTiling const tiling,
@@ -881,11 +881,11 @@ protected:
 	) const {
         for (auto format : candidates) {
             auto props = getFormatProperties(format);
-            if (tiling == VK_IMAGE_TILING_LINEAR && 
+            if (tiling == VK_IMAGE_TILING_LINEAR &&
 				(props.linearTilingFeatures & features) == features
 			) {
                 return format;
-            } else if (tiling == VK_IMAGE_TILING_OPTIMAL && 
+            } else if (tiling == VK_IMAGE_TILING_OPTIMAL &&
 				(props.optimalTilingFeatures & features) == features
 			) {
                 return format;
@@ -901,6 +901,7 @@ std::vector<char const *> validationLayers = {
 };
 
 struct VulkanDevice : public VulkanHandle<VkDevice> {
+	using Super = VulkanHandle<VkDevice>;
 protected:
 	std::unique_ptr<VulkanQueue> graphicsQueue;
 	std::unique_ptr<VulkanQueue> presentQueue;
@@ -924,7 +925,7 @@ public:
 		return result;
 	}
 	
-	// maybe there's no need for these 'create' functions 
+	// maybe there's no need for these 'create' functions
 
 #define CREATE_CREATER(name, suffix)\
 	Vk##name##suffix create##name(\
@@ -948,6 +949,15 @@ CREATE_CREATER(DescriptorSetLayout, )
 CREATE_CREATER(ShaderModule, )
 CREATE_CREATER(PipelineLayout, )
 CREATE_CREATER(CommandPool, )
+
+	VkDeviceMemory allocateMemory(
+		VkMemoryAllocateInfo const * const info,
+		VkAllocationCallbacks const * const allocator = nullptr/*getAllocator()*/
+	) const {
+		auto result = VkDeviceMemory{};
+		VULKAN_SAFE(vkAllocateMemory, (*this)(), info, allocator, &result);
+		return result;
+	}
 
 	VkPipeline createGraphicsPipelines(
 		VkPipelineCache pipelineCache,
@@ -1003,7 +1013,7 @@ CREATE_CREATER(CommandPool, )
 		);
 	}
 
-	// ************** from here on down, app-specific **************  
+	// ************** from here on down, app-specific **************
 	
 	VulkanDevice(
 		ThisVulkanPhysicalDevice const * const physicalDevice,
@@ -1061,7 +1071,7 @@ public:
 		if (handle) vkDestroyRenderPass((*device)(), handle, getAllocator());
 	}
 	
-	// ************** from here on down, app-specific **************  
+	// ************** from here on down, app-specific **************
 
 	VulkanRenderPass(
 		ThisVulkanPhysicalDevice const * const physicalDevice,
@@ -1107,7 +1117,7 @@ public:
 		auto depthAttachmentRef = VkAttachmentReference{
 			.attachment = 1,
 			.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-		};	
+		};
         auto colorAttachmentResolveRef = VkAttachmentReference{
 			.attachment = 2,
 			.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
@@ -1125,15 +1135,15 @@ public:
 			VkSubpassDependency{
 				.srcSubpass = VK_SUBPASS_EXTERNAL,
 				.dstSubpass = 0,
-				.srcStageMask = 
-					VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | 
+				.srcStageMask =
+					VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
 					VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-				.dstStageMask = 
-					VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | 
+				.dstStageMask =
+					VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
 					VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
 				.srcAccessMask = 0,
-				.dstAccessMask = 
-					VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | 
+				.dstAccessMask =
+					VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
 					VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
 			}
 		);
@@ -1160,6 +1170,23 @@ public:
 		if (handle) vkDestroyBuffer((*device)(), handle, getAllocator());
 	}
 
+	// also in VulkanHandle
+#if 1
+	VulkanBuffer(VulkanBuffer && o)
+	: Super(o.handle) {
+		o.handle = {};
+	}
+	VulkanBuffer & operator=(VulkanBuffer && o) {
+		if (this != &o) {
+			handle = o.handle;
+			o.handle = {};
+		}
+		return *this;
+	}
+	VulkanBuffer(VulkanBuffer const & o) = delete;
+	VulkanBuffer & operator=(VulkanBuffer const & o) = delete;
+#endif
+
 	VulkanBuffer(
 		VkBuffer handle_,
 		VulkanDevice const * const device_
@@ -1169,14 +1196,71 @@ public:
 
 	VulkanBuffer(
 		VulkanDevice const * const device_,
-		VkBufferCreateInfo const createInfo
-	) : Super(device_->createBuffer(&createInfo, getAllocator())),
+		VkBufferCreateInfo const info
+	) : Super(device_->createBuffer(&info, getAllocator())),
 		device(device_)
 	{}
+
+
+	auto getMemoryRequirements() const {
+		auto result = VkMemoryRequirements{};
+		vkGetBufferMemoryRequirements((*device)(), (*this)(), &result);
+		return result;
+	}
+
+	void bindMemory(
+		VkDeviceMemory const mem,
+		VkDeviceSize offset = 0
+	) const {
+		VULKAN_SAFE(vkBindBufferMemory, (*device)(), (*this)(), mem, offset);
+	}
+};
+
+struct VulkanDeviceMemory : public VulkanHandle<VkDeviceMemory> {
+	using Super = VulkanHandle<VkDeviceMemory>;
+protected:
+	//holds
+	VulkanDevice const * device = {};
+public:
+	~VulkanDeviceMemory() {
+		if (handle) vkFreeMemory((*device)(), handle, Super::getAllocator());
+	}
+
+	VulkanDeviceMemory(
+		VkDeviceMemory handle_,
+		VulkanDevice const * const device_
+	) : Super(handle_),
+		device(device_)
+	{}
+
+	VulkanDeviceMemory(
+		VulkanDevice const * const device_,
+		VkMemoryAllocateInfo const info
+	) : Super(device_->allocateMemory(&info, getAllocator())),
+		device(device_)
+	{}
+
+	// also in VulkanHandle
+#if 1
+	VulkanDeviceMemory(VulkanDeviceMemory && o)
+	: Super(o.handle) {
+		o.handle = {};
+	}
+	VulkanDeviceMemory & operator=(VulkanDeviceMemory && o) {
+		if (this != &o) {
+			handle = o.handle;
+			o.handle = {};
+		}
+		return *this;
+	}
+	VulkanDeviceMemory(VulkanDeviceMemory const & o) = delete;
+	VulkanDeviceMemory & operator=(VulkanDeviceMemory const & o) = delete;
+#endif
+
 };
 
 /*
-ok i've got 
+ok i've got
 - VkBuffer with VkDeviceMemory
 - VkImage with VkDeviceMemory
 - VkImage with VkImageView (and VkFramebuffer?)
@@ -1207,21 +1291,33 @@ public:
 
 	// also in VulkanHandle
 #if 1
-	VulkanImage(VulkanImage && rhs) 
-	: Super(rhs.handle) { 
-		rhs.handle = {}; 
+	VulkanImage(VulkanImage && o)
+	: Super(o.handle) {
+		o.handle = {};
 	}
-	VulkanImage & operator=(VulkanImage && rhs) {
-		if (this != &rhs) {
-			handle = rhs.handle;
-			rhs.handle = {};
+	VulkanImage & operator=(VulkanImage && o) {
+		if (this != &o) {
+			handle = o.handle;
+			o.handle = {};
 		}
 		return *this;
 	}
-	VulkanImage(VulkanImage const & rhs) = delete;
-	VulkanImage & operator=(VulkanImage const & rhs) = delete;
+	VulkanImage(VulkanImage const & o) = delete;
+	VulkanImage & operator=(VulkanImage const & o) = delete;
 #endif
 
+	auto getMemoryRequirements() const {
+		auto result = VkMemoryRequirements{};
+		vkGetImageMemoryRequirements((*device)(), (*this)(), &result);
+		return result;
+	}
+
+	void bindMemory(
+		VkDeviceMemory const mem,
+		VkDeviceSize offset = 0
+	) const {
+		VULKAN_SAFE(vkBindImageMemory, (*device)(), (*this)(), mem, offset);
+	}
 };
 
 struct VulkanImageView : public VulkanHandle<VkImageView> {
@@ -1248,7 +1344,7 @@ public:
 		VulkanDevice const * const device_,
 		VkImageViewCreateInfo const createInfo
 	) : Super(device_->createImageView(&createInfo, getAllocator())),
-		device(device_) 
+		device(device_)
 	{}
 };
 
@@ -1289,19 +1385,19 @@ public:
 
 #if 1
 	VulkanCommandBuffer(Handle handle_) : Super(handle_) {}
-	VulkanCommandBuffer(VulkanCommandBuffer && rhs) 
-	: Super(rhs.handle) { 
-		rhs.handle = {}; 
+	VulkanCommandBuffer(VulkanCommandBuffer && o)
+	: Super(o.handle) {
+		o.handle = {};
 	}
-	VulkanCommandBuffer & operator=(VulkanCommandBuffer && rhs) {
-		if (this != &rhs) {
-			handle = rhs.handle;
-			rhs.handle = {};
+	VulkanCommandBuffer & operator=(VulkanCommandBuffer && o) {
+		if (this != &o) {
+			handle = o.handle;
+			o.handle = {};
 		}
 		return *this;
 	}
-	VulkanCommandBuffer(VulkanCommandBuffer const & rhs) = delete;
-	VulkanCommandBuffer & operator=(VulkanCommandBuffer const & rhs) = delete;
+	VulkanCommandBuffer(VulkanCommandBuffer const & o) = delete;
+	VulkanCommandBuffer & operator=(VulkanCommandBuffer const & o) = delete;
 #endif
 
 	VulkanCommandBuffer(
@@ -1362,7 +1458,7 @@ public:
 
 	// TODO but dont use vector args cuz thats needless allocs
 	// try to do array args, but that makes empty arrays {} fail to type-deduce ...
-	// hmm another way is to template a tuple, then lambda iterate across it, 
+	// hmm another way is to template a tuple, then lambda iterate across it,
 	//  and fill out memBarriers, bufferMemBarriers, imageMemBarriers according to the types found ...
 	// might be cumbersome ...
 	template<
@@ -1550,7 +1646,7 @@ struct VulkanSingleTimeCommand : public VulkanCommandBuffer {
 	VulkanSingleTimeCommand(
 		VulkanDevice const * const device_,
 		VkCommandPool commandPool_
-	) : Super({}, device_, commandPool_) 
+	) : Super({}, device_, commandPool_)
 	{
 		// TODO this matches 'initCommandBuffers' for each frame-in-flight
 		auto allocInfo = VkCommandBufferAllocateInfo{
@@ -1649,7 +1745,7 @@ public:
 					height,
 					1
 				},
-			}	
+			}
 		);
 	}
 
@@ -1733,15 +1829,6 @@ public:
 		memory(memory_),
 		device(device_)
 	{}
-
-	//only call this after handle is filled
-	// is this a 'device' method or a 'buffer' method?
-	// is this only for VkBuffer or also for VkImage ?
-	VkMemoryRequirements getMemoryRequirements() const {
-		auto memRequirements = VkMemoryRequirements{};
-		vkGetBufferMemoryRequirements((*device)(), (*this)(), &memRequirements);
-		return memRequirements;
-	}
 };
 
 struct VulkanDeviceMemoryBuffer : public VulkanDeviceMemoryParent<VulkanBuffer> {
@@ -1755,7 +1842,7 @@ struct VulkanDeviceMemoryBuffer : public VulkanDeviceMemoryParent<VulkanBuffer> 
 		VkDeviceSize size,
 		VkBufferUsageFlags usage,
 		VkMemoryPropertyFlags properties
-	) 
+	)
 #if 0	// new
 // TODO get	VulkanDeviceMemoryParent to pass-thru correctly
 	: Super(
@@ -1778,7 +1865,7 @@ struct VulkanDeviceMemoryBuffer : public VulkanDeviceMemoryParent<VulkanBuffer> 
 		Super::handle = device_->createBuffer(&bufferInfo);
 #endif
 
-		VkMemoryRequirements memRequirements = Super::getMemoryRequirements();
+		auto memRequirements = Super::getMemoryRequirements();
 		auto allocInfo = VkMemoryAllocateInfo{
 			.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
 			.allocationSize = memRequirements.size,
@@ -1786,10 +1873,10 @@ struct VulkanDeviceMemoryBuffer : public VulkanDeviceMemoryParent<VulkanBuffer> 
 		};
 		VULKAN_SAFE(vkAllocateMemory, (*Super::device)(), &allocInfo, getAllocator(), &memory);
 
-		vkBindBufferMemory((*Super::device)(), (*this)(), Super::memory, 0);
+		bindMemory(Super::memory);
 	}
 
-	// TODO make a StagingBuffer subclass? 
+	// TODO make a StagingBuffer subclass?
 	static std::unique_ptr<VulkanDeviceMemoryBuffer> makeFromStaged(
 		VulkanPhysicalDevice const * const physicalDevice,
 		VulkanDevice const * const device,
@@ -1883,8 +1970,8 @@ public:
 			VK_SAMPLE_COUNT_1_BIT,
 			VK_FORMAT_R8G8B8A8_SRGB,
 			VK_IMAGE_TILING_OPTIMAL,
-			VK_IMAGE_USAGE_TRANSFER_SRC_BIT 
-			| VK_IMAGE_USAGE_TRANSFER_DST_BIT 
+			VK_IMAGE_USAGE_TRANSFER_SRC_BIT
+			| VK_IMAGE_USAGE_TRANSFER_DST_BIT
 			| VK_IMAGE_USAGE_SAMPLED_BIT,
 			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
 		);
@@ -1949,21 +2036,22 @@ public:
 			}
 		);
 
-		auto memRequirements = VkMemoryRequirements{};
-		vkGetImageMemoryRequirements((*device)(), image(), &memRequirements);
-
-		auto imageMemory = VkDeviceMemory{};
-		auto allocInfo = VkMemoryAllocateInfo{
+		auto memRequirements = image.getMemoryRequirements();
+		auto imageMemory = VulkanDeviceMemory(device, VkMemoryAllocateInfo{
 			.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
 			.allocationSize = memRequirements.size,
-			.memoryTypeIndex = physicalDevice->findMemoryType(memRequirements.memoryTypeBits, properties),
-		};
-		VULKAN_SAFE(vkAllocateMemory, (*device)(), &allocInfo, nullptr/*getAllocator()*/, &imageMemory);
+			.memoryTypeIndex = physicalDevice->findMemoryType(
+				memRequirements.memoryTypeBits,
+				properties
+			),
+		});
 
-		vkBindImageMemory((*device)(), image(), imageMemory, 0);
+		image.bindMemory(imageMemory());
 		
-		auto result = std::make_unique<VulkanDeviceMemoryImage>(image(), imageMemory, device);
+		auto result = std::make_unique<VulkanDeviceMemoryImage>(image(), imageMemory(), device);
+		// TODO move or something?
 		image.release();
+		imageMemory.release();
 		return result;
 	}
 };
@@ -2013,7 +2101,7 @@ public:
 		return vulkanEnum<VkImage>(NAME_PAIR(vkGetSwapchainImagesKHR), (*device)(), (*this)());
 	}
 	
-	// ************** from here on down, app-specific **************  
+	// ************** from here on down, app-specific **************
 	// but so are all the member variables so ...
 
 	VulkanSwapChain(
@@ -2222,13 +2310,13 @@ public:
 		VulkanDevice const * const device_
 	) : device(device_) {
 		auto bindings = Common::make_array(
-			VkDescriptorSetLayoutBinding{	//uboLayoutBinding 
+			VkDescriptorSetLayoutBinding{	//uboLayoutBinding
 				.binding = 0,
 				.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
 				.descriptorCount = 1,
 				.stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
 			},
-			VkDescriptorSetLayoutBinding{	//samplerLayoutBinding 
+			VkDescriptorSetLayoutBinding{	//samplerLayoutBinding
 				.binding = 1,
 				.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
 				.descriptorCount = 1,
@@ -2655,7 +2743,7 @@ public:
 		uniformBuffers.clear();
 		indexBuffer = nullptr;
 		vertexBuffer = nullptr;
-		descriptorPool = nullptr;		
+		descriptorPool = nullptr;
 		textureSampler = nullptr;
 		textureImageView = nullptr;
 		textureImage = nullptr;
@@ -3012,7 +3100,7 @@ protected:
 					.height = (float)swapChain->extent.height,
 					.minDepth = 0,
 					.maxDepth = 1,
-				}		
+				}
 			));
 
 			commandBuffer->setScissor(Common::make_array(
@@ -3191,7 +3279,7 @@ float[3][4][4] buf = {
 			{-0.000000, -0.000000, -3.464102, 1.000000},
 		};
 
-//std::cout << ubo.view << std::endl;	
+//std::cout << ubo.view << std::endl;
 /*
 {
 	{0.707107, -0.707107, 0, 0},
