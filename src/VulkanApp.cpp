@@ -290,6 +290,8 @@ public:
 
 
 struct VulkanInstance : public VulkanHandle<VkInstance> {
+	using Super = VulkanHandle<VkInstance>;
+	
 	~VulkanInstance() {
 		if (handle) vkDestroyInstance(handle, getAllocator());
 	}
@@ -466,26 +468,26 @@ struct VulkanPhysicalDevice : public VulkanHandle<VkPhysicalDevice> {
 
 	// TODO maybe I shouldn't return-by-value the structs ...
 	
-	VkPhysicalDeviceProperties getProperties() const {
+	auto getProperties() const {
 		auto physDevProps = VkPhysicalDeviceProperties{};
 		vkGetPhysicalDeviceProperties((*this)(), &physDevProps);
 		return physDevProps;
 	}
 
-	VkPhysicalDeviceMemoryProperties getMemoryProperties() const {
+	auto getMemoryProperties() const {
 		auto memProps = VkPhysicalDeviceMemoryProperties{};
 		vkGetPhysicalDeviceMemoryProperties((*this)(), &memProps);
 		return memProps;
 	}
 	
-	std::vector<VkQueueFamilyProperties> getQueueFamilyProperties() const {
+	auto getQueueFamilyProperties() const {
 		return vulkanEnum<VkQueueFamilyProperties>(
 			NAME_PAIR(vkGetPhysicalDeviceQueueFamilyProperties),
 			(*this)()
 		);
 	}
 
-	std::vector<VkExtensionProperties> getExtensionProperties(
+	auto getExtensionProperties(
 		char const * const layerName = nullptr
 	) const {
 		return vulkanEnum<VkExtensionProperties>(
@@ -507,7 +509,7 @@ struct VulkanPhysicalDevice : public VulkanHandle<VkPhysicalDevice> {
 	//pass-by-value ok?
 	// should these be physical-device-specific or surface-specific?
 	//  if a surface needs a physical device ... the latter?
-	VkSurfaceCapabilitiesKHR getSurfaceCapabilities(
+	auto getSurfaceCapabilities(
 		VkSurfaceKHR surface
 	) const {
 		auto caps = VkSurfaceCapabilitiesKHR{};
@@ -515,7 +517,7 @@ struct VulkanPhysicalDevice : public VulkanHandle<VkPhysicalDevice> {
 		return caps;
 	}
 
-	std::vector<VkSurfaceFormatKHR> getSurfaceFormats(
+	auto getSurfaceFormats(
 		VkSurfaceKHR surface
 	) const {
 		return vulkanEnum<VkSurfaceFormatKHR>(
@@ -525,7 +527,7 @@ struct VulkanPhysicalDevice : public VulkanHandle<VkPhysicalDevice> {
 		);
 	}
 
-	std::vector<VkPresentModeKHR> getSurfacePresentModes(
+	auto getSurfacePresentModes(
 		VkSurfaceKHR surface
 	) const {
 		return vulkanEnum<VkPresentModeKHR>(
@@ -535,19 +537,27 @@ struct VulkanPhysicalDevice : public VulkanHandle<VkPhysicalDevice> {
 		);
 	}
 
-	VkPhysicalDeviceFeatures getFeatures() const {
+	auto getFeatures() const {
 		auto features = VkPhysicalDeviceFeatures{};
 		vkGetPhysicalDeviceFeatures((*this)(), &features);
 		return features;
 	}
 
-	VkDevice createDevice(
+	auto createDevice(
 		VkDeviceCreateInfo const * const createInfo,
 		VkAllocationCallbacks const * const allocator = nullptr//getAllocator()
 	) const {
 		auto device = VkDevice{};
 		VULKAN_SAFE(vkCreateDevice, (*this)(), createInfo, allocator, &device);
 		return device;
+	}
+
+	auto getFormatProperties(
+		VkFormat const format
+	) const {
+		auto props = VkFormatProperties{};
+		vkGetPhysicalDeviceFormatProperties((*this)(), format, &props);
+		return props;
 	}
 
 	// this is halfway app-specific.  it was in the tut's organization but I'm 50/50 if it is good design
@@ -571,7 +581,7 @@ struct VulkanPhysicalDevice : public VulkanHandle<VkPhysicalDevice> {
 		std::vector<VkPresentModeKHR> presentModes;
 	};
 
-	SwapChainSupportDetails querySwapChainSupport(
+	auto querySwapChainSupport(
 		VkSurfaceKHR surface
 	) const {
 		return SwapChainSupportDetails{
@@ -649,17 +659,15 @@ protected:
 	}
 
     VkSampleCountFlagBits getMaxUsableSampleCount() const {
-        auto physicalDeviceProperties = VkPhysicalDeviceProperties{};
-        vkGetPhysicalDeviceProperties((*this)(), &physicalDeviceProperties);
+        auto physicalDeviceProperties = getProperties();
 
-        VkSampleCountFlags counts = physicalDeviceProperties.limits.framebufferColorSampleCounts & physicalDeviceProperties.limits.framebufferDepthSampleCounts;
+        auto counts = physicalDeviceProperties.limits.framebufferColorSampleCounts & physicalDeviceProperties.limits.framebufferDepthSampleCounts;
         if (counts & VK_SAMPLE_COUNT_64_BIT) { return VK_SAMPLE_COUNT_64_BIT; }
         if (counts & VK_SAMPLE_COUNT_32_BIT) { return VK_SAMPLE_COUNT_32_BIT; }
         if (counts & VK_SAMPLE_COUNT_16_BIT) { return VK_SAMPLE_COUNT_16_BIT; }
         if (counts & VK_SAMPLE_COUNT_8_BIT) { return VK_SAMPLE_COUNT_8_BIT; }
         if (counts & VK_SAMPLE_COUNT_4_BIT) { return VK_SAMPLE_COUNT_4_BIT; }
         if (counts & VK_SAMPLE_COUNT_2_BIT) { return VK_SAMPLE_COUNT_2_BIT; }
-
         return VK_SAMPLE_COUNT_1_BIT;
     }
 
@@ -710,13 +718,11 @@ public:
 protected: 
 	VkFormat findSupportedFormat(
 		std::vector<VkFormat> const & candidates,
-		VkImageTiling tiling,
-		VkFormatFeatureFlags features
+		VkImageTiling const tiling,
+		VkFormatFeatureFlags const features
 	) const {
-        for (VkFormat format : candidates) {
-            VkFormatProperties props = {};
-            vkGetPhysicalDeviceFormatProperties((*this)(), format, &props);
-
+        for (auto format : candidates) {
+            auto props = getFormatProperties(format);
             if (tiling == VK_IMAGE_TILING_LINEAR && 
 				(props.linearTilingFeatures & features) == features
 			) {
@@ -974,6 +980,115 @@ public:
 	}
 };
 
+struct VulkanBuffer : public VulkanHandle<VkBuffer> {
+	using Super = VulkanHandle<VkBuffer>;
+protected:
+	//holds
+	VulkanDevice const * device = {};
+public:
+	~VulkanBuffer() {
+		if (handle) vkDestroyBuffer((*device)(), handle, getAllocator());
+	}
+
+	VulkanBuffer(
+		VkBuffer handle_,
+		VulkanDevice const * const device_
+	) : Super(handle_),
+		device(device_)
+	{}
+
+	VulkanBuffer(
+		VulkanDevice const * const device_,
+		VkBufferCreateInfo const createInfo
+	) : Super(device_->createBuffer(&createInfo, getAllocator())),
+		device(device_)
+	{}
+};
+
+/*
+ok i've got 
+- VkBuffer with VkDeviceMemory
+- VkImage with VkDeviceMemory
+- VkImage with VkImageView (and VkFramebuffer?)
+*/
+struct VulkanImage : public VulkanHandle<VkImage> {
+	using Super = VulkanHandle<VkImage>;
+protected:
+	//holds
+	VulkanDevice const * const device = {};
+public:
+	~VulkanImage() {
+		if (handle) vkDestroyImage((*device)(), handle, getAllocator());
+	}
+
+	VulkanImage(
+		VkImage handle_,
+		VulkanDevice const * const device_
+	) : Super(handle_),
+		device(device_)
+	{}
+
+	VulkanImage(
+		VulkanDevice const * const device_,
+		VkImageCreateInfo const createInfo
+	) : Super(device_->createImage(&createInfo, getAllocator())),
+		device(device_)
+	{}
+};
+
+struct VulkanImageView : public VulkanHandle<VkImageView> {
+	using Super = VulkanHandle<VkImageView>;
+protected:
+	//holds
+	VulkanDevice const * device = {};
+public:
+	~VulkanImageView() {
+		if (handle) vkDestroyImageView((*device)(), handle, getAllocator());
+	}
+
+	//should I put handle first since all subclasses of VulkanHandle have handle-first?
+	// (but not all have device-first)
+	//or should I put device first since all ctors of VulkanImageView have device required (but not necessarily handle) ?
+	VulkanImageView(
+		VkImageView handle_,
+		VulkanDevice const * const device_
+	) : Super(handle_),
+		device(device_)
+	{}
+
+	VulkanImageView(
+		VulkanDevice const * const device_,
+		VkImageViewCreateInfo const createInfo
+	) : Super(device_->createImageView(&createInfo, getAllocator())),
+		device(device_) 
+	{}
+};
+
+struct VulkanSampler : public VulkanHandle<VkSampler> {
+	using Super = VulkanHandle<VkSampler>;
+protected:
+	//holds
+	VulkanDevice const * device = {};
+public:
+	~VulkanSampler() {
+		if (handle) vkDestroySampler((*device)(), handle, getAllocator());
+	}
+
+	VulkanSampler(
+		VkSampler handle_,
+		VulkanDevice const * const device_
+	) : Super(handle_),
+		device(device_)
+	{}
+
+	VulkanSampler(
+		VulkanDevice const * const device_,
+		VkSamplerCreateInfo const createInfo
+	) : Super(device_->createSampler(&createInfo, getAllocator())),
+		device(device_)
+	{}
+};
+
 struct VulkanCommandBuffer : public VulkanHandle<VkCommandBuffer> {
 	using Super = VulkanHandle<VkCommandBuffer>;
 protected:
@@ -985,13 +1100,43 @@ public:
 	}
 
 	VulkanCommandBuffer(
-		VkCommandBuffer handle_,
+		VkCommandBuffer const handle_,
 		VulkanDevice const * const device_,
-		VkCommandPool commandPool_
+		VkCommandPool const commandPool_
 	) : Super(handle_),
 		device(device_),
 		commandPool(commandPool_)
 	{}
+
+	void copyBuffer(
+		VkBuffer const srcBuffer,
+		VkBuffer const dstBuffer,
+		VkBufferCopy const region
+	) const {
+		vkCmdCopyBuffer(
+			(*this)(),
+			srcBuffer,
+			dstBuffer,
+			1,	//count ... TODO make an array-based one?
+			&region);
+	}
+
+	void copyBufferToImage(
+		VkBuffer const buffer,
+		VkImage const image,
+		uint32_t width,
+		uint32_t height,
+		VkBufferImageCopy const region
+	) const {
+		vkCmdCopyBufferToImage(
+			(*this)(),
+			buffer,
+			image,
+			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+			1,
+			&region
+		);
+	}
 };
 
 struct VulkanSingleTimeCommand : public VulkanCommandBuffer {
@@ -1061,11 +1206,14 @@ public:
 		VkBuffer dstBuffer,	//dest VkBuffer
 		VkDeviceSize size
 	) const {
-		VulkanSingleTimeCommand commandBuffer(device, (*this)());
-		auto copyRegion = VkBufferCopy{
-			.size = size,
-		};
-		vkCmdCopyBuffer(commandBuffer(), srcBuffer, dstBuffer, 1, &copyRegion);
+		VulkanSingleTimeCommand(device, (*this)())
+		.copyBuffer(
+			srcBuffer,
+			dstBuffer,
+			VkBufferCopy{
+				.size = size,
+			}
+		);
 	}
 
 	void copyBufferToImage(
@@ -1074,32 +1222,29 @@ public:
 		uint32_t width,
 		uint32_t height
 	) const {
-		VulkanSingleTimeCommand commandBuffer(device, (*this)());
-
-		auto region = VkBufferImageCopy{
-			.bufferOffset = 0,
-			.bufferRowLength = 0,
-			.bufferImageHeight = 0,
-			.imageSubresource = {
-				.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-				.mipLevel = 0,
-				.baseArrayLayer = 0,
-				.layerCount = 1,
-			},
-			.imageOffset = {0, 0, 0},
-			.imageExtent = {
-				width,
-				height,
-				1
-			},
-		};
-		vkCmdCopyBufferToImage(
-			commandBuffer(),
+		VulkanSingleTimeCommand(device, (*this)())
+		.copyBufferToImage(
 			buffer,
 			image,
-			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-			1,
-			&region
+			width,
+			height,
+			VkBufferImageCopy{
+				.bufferOffset = 0,
+				.bufferRowLength = 0,
+				.bufferImageHeight = 0,
+				.imageSubresource = {
+					.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+					.mipLevel = 0,
+					.baseArrayLayer = 0,
+					.layerCount = 1,
+				},
+				.imageOffset = {0, 0, 0},
+				.imageExtent = {
+					width,
+					height,
+					1
+				},
+			}	
 		);
 	}
 
@@ -1162,90 +1307,6 @@ public:
 	}
 };
 
-/*
-ok i've got 
-- VkBuffer with VkDeviceMemory
-- VkImage with VkDeviceMemory
-- VkImage with VkImageView (and VkFramebuffer?)
-*/
-struct VulkanImage : public VulkanHandle<VkImage> {
-	using Super = VulkanHandle<VkImage>;
-protected:
-	//holds
-	VulkanDevice const * const device = {};
-public:
-	~VulkanImage() {
-		if (handle) vkDestroyImage((*device)(), handle, getAllocator());
-	}
-
-	VulkanImage(
-		VkImage handle_,
-		VulkanDevice const * const device_
-	) : Super(handle_),
-		device(device_)
-	{}
-
-	VulkanImage(
-		VulkanDevice const * const device_,
-		VkImageCreateInfo const createInfo
-	) : Super(device_->createImage(&createInfo, getAllocator())),
-		device(device_)
-	{}
-};
-
-struct VulkanImageView : public VulkanHandle<VkImageView> {
-	using Super = VulkanHandle<VkImageView>;
-protected:
-	//holds
-	VulkanDevice const * device = {};
-public:
-	~VulkanImageView() {
-		if (handle) vkDestroyImageView((*device)(), handle, getAllocator());
-	}
-
-	//should I put handle first since all subclasses of VulkanHandle have handle-first?
-	// (but not all have device-first)
-	//or should I put device first since all ctors of VulkanImageView have device required (but not necessarily handle) ?
-	VulkanImageView(
-		VkImageView handle_,
-		VulkanDevice const * const device_
-	) : Super(handle_),
-		device(device_)
-	{}
-
-	VulkanImageView(
-		VulkanDevice const * const device_,
-		VkImageViewCreateInfo const createInfo
-	) : Super(device_->createImageView(&createInfo, getAllocator())),
-		device(device_) 
-	{}
-};
-
-struct VulkanBuffer : public VulkanHandle<VkBuffer> {
-	using Super = VulkanHandle<VkBuffer>;
-protected:
-	//holds
-	VulkanDevice const * device = {};
-public:
-	~VulkanBuffer() {
-		if (handle) vkDestroyBuffer((*device)(), handle, getAllocator());
-	}
-
-	VulkanBuffer(
-		VkBuffer handle_,
-		VulkanDevice const * const device_
-	) : Super(handle_),
-		device(device_)
-	{}
-
-	VulkanBuffer(
-		VulkanDevice const * const device_,
-		VkBufferCreateInfo const createInfo
-	) : Super(device_->createBuffer(&createInfo, getAllocator())),
-		device(device_)
-	{}
-};
-
 // methods common to VkBuffer and VkImage paired with VkDeviceMemory
 template<typename Super_>
 struct VulkanDeviceMemoryParent  : public Super_ {
@@ -1274,6 +1335,7 @@ public:
 
 	//only call this after handle is filled
 	// is this a 'device' method or a 'buffer' method?
+	// is this only for VkBuffer or also for VkImage ?
 	VkMemoryRequirements getMemoryRequirements() const {
 		auto memRequirements = VkMemoryRequirements{};
 		vkGetBufferMemoryRequirements((*device)(), (*this)(), &memRequirements);
@@ -1293,7 +1355,7 @@ struct VulkanDeviceMemoryBuffer : public VulkanDeviceMemoryParent<VulkanBuffer> 
 		VkBufferUsageFlags usage,
 		VkMemoryPropertyFlags properties
 	) 
-#if 0	// new	
+#if 0	// new
 // TODO get	VulkanDeviceMemoryParent to pass-thru correctly
 	: Super(
 		device_,
@@ -1464,6 +1526,7 @@ public:
 		VkImageUsageFlags usage,
 		VkMemoryPropertyFlags properties
 	) {
+#if 1
 		auto image = VkImage{};
 		auto imageInfo = VkImageCreateInfo{
 			.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
@@ -1483,7 +1546,29 @@ public:
 			.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
 		};
 		VULKAN_SAFE(vkCreateImage, (*device)(), &imageInfo, nullptr/*getAllocator()*/, &image);
-
+#else		
+		// TODO this as a ctor that just calls Super
+		VulkanImage image(
+			device,
+			VkImageCreateInfo{
+				.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+				.imageType = VK_IMAGE_TYPE_2D,
+				.format = format,
+				.extent = {
+					.width = width,
+					.height = height,
+					.depth = 1,
+				},
+				.mipLevels = mipLevels,
+				.arrayLayers = 1,
+				.samples = numSamples,
+				.tiling = tiling,
+				.usage = usage,
+				.sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+				.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+			}
+		);
+#endif
 		auto memRequirements = VkMemoryRequirements{};
 		vkGetImageMemoryRequirements((*device)(), image, &memRequirements);
 
@@ -2024,7 +2109,7 @@ protected:
 	std::unique_ptr<VulkanDeviceMemoryImage> textureImage;
 
 	std::unique_ptr<VulkanImageView> textureImageView;
-	VkSampler textureSampler = {};
+	std::unique_ptr<VulkanSampler> textureSampler;
     
 	std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
@@ -2105,19 +2190,51 @@ public:
 		);
 	
 		createTextureImage();
-		createTextureImageView();
-		createTextureSampler();
-        loadModel();
+       
+		textureImageView = swapChain->createImageView(
+			(*textureImage)(),
+			VK_FORMAT_R8G8B8A8_SRGB,
+			VK_IMAGE_ASPECT_COLOR_BIT,
+			mipLevels
+		);
+
+		textureSampler = std::make_unique<VulkanSampler>(
+			device.get(),
+			VkSamplerCreateInfo{
+				.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+				.magFilter = VK_FILTER_LINEAR,
+				.minFilter = VK_FILTER_LINEAR,
+				.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+				.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+				.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+				.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+				.mipLodBias = 0,
+				.anisotropyEnable = VK_TRUE,
+				.maxAnisotropy = physicalDevice->getProperties().limits.maxSamplerAnisotropy,
+				.compareEnable = VK_FALSE,
+				.compareOp = VK_COMPARE_OP_ALWAYS,
+				.minLod = 0,
+				.maxLod = static_cast<float>(mipLevels),
+				.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK,
+				.unnormalizedCoordinates = VK_FALSE,
+			}
+		);
+
+		loadModel();
 		
 		initVertexBuffer();
 		initIndexBuffer();
 		initUniformBuffers();
+		
 		descriptorPool = std::make_unique<VulkanDescriptorPool>(
 			device.get(),
 			(uint32_t)maxFramesInFlight
 		);
+		
 		createDescriptorSets();
+		
 		initCommandBuffers();
+		
 		initSyncObjects();
 	}
 
@@ -2146,13 +2263,11 @@ public:
 	~VulkanCommon() {
 		swapChain = nullptr;
 		graphicsPipeline = nullptr;
-
 		uniformBuffers.clear();
 		indexBuffer = nullptr;
 		vertexBuffer = nullptr;
 		descriptorPool = nullptr;		
-
-		vkDestroySampler((*device)(), textureSampler, nullptr);
+		textureSampler = nullptr;
 		textureImageView = nullptr;
 		textureImage = nullptr;
 
@@ -2198,7 +2313,7 @@ protected:
 		
 		char const * const srcData = image->getData();
 		VkDeviceSize const bufferSize = texSize.x * texSize.y * texBPP;
-		mipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(texSize.x, texSize.y)))) + 1;
+		mipLevels = (uint32_t)std::floor(std::log2(std::max(texSize.x, texSize.y))) + 1;
 	
 		textureImage = VulkanDeviceMemoryImage::makeTextureFromStaged(
 			physicalDevice.get(),
@@ -2220,10 +2335,15 @@ protected:
 		);
 	}
 
-    void generateMipmaps(VkImage image, VkFormat imageFormat, int32_t texWidth, int32_t texHeight, uint32_t mipLevels) {
+    void generateMipmaps(
+		VkImage image,
+		VkFormat imageFormat,
+		int32_t texWidth,
+		int32_t texHeight,
+		uint32_t mipLevels
+	) {
         // Check if image format supports linear blitting
-        VkFormatProperties formatProperties = {};
-        vkGetPhysicalDeviceFormatProperties((*physicalDevice)(), imageFormat, &formatProperties);
+        auto formatProperties = physicalDevice->getFormatProperties(imageFormat);
 
         if (!(formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)) {
             throw Common::Exception() << "texture image format does not support linear blitting!";
@@ -2256,13 +2376,16 @@ protected:
 
             vkCmdPipelineBarrier(
 				commandBuffer(),
-                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                VK_PIPELINE_STAGE_TRANSFER_BIT,
+				VK_PIPELINE_STAGE_TRANSFER_BIT,
+				0,
                 0,
 				nullptr,
                 0,
 				nullptr,
                 1,
-				&barrier);
+				&barrier
+			);
 
             auto blit = VkImageBlit{
 				.srcSubresource = {
@@ -2307,13 +2430,16 @@ protected:
 
             vkCmdPipelineBarrier(
 				commandBuffer(),
-                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+                VK_PIPELINE_STAGE_TRANSFER_BIT,
+				VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+				0,
                 0,
 				nullptr,
                 0,
 				nullptr,
                 1,
-				&barrier);
+				&barrier
+			);
 
             if (mipWidth > 1) mipWidth /= 2;
             if (mipHeight > 1) mipHeight /= 2;
@@ -2327,48 +2453,17 @@ protected:
 
         vkCmdPipelineBarrier(
 			commandBuffer(),
-            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+			VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+			0,
             0,
 			nullptr,
             0,
 			nullptr,
             1,
-			&barrier);
-    }
-
-	void createTextureImageView() {
-		textureImageView = swapChain->createImageView(
-			(*textureImage)(),
-			VK_FORMAT_R8G8B8A8_SRGB,
-			VK_IMAGE_ASPECT_COLOR_BIT,
-			mipLevels
+			&barrier
 		);
-	}
-
-	void createTextureSampler() {
-		auto properties = VkPhysicalDeviceProperties{};
-		vkGetPhysicalDeviceProperties((*physicalDevice)(), &properties);
-
-		auto samplerInfo = VkSamplerCreateInfo{
-			.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
-			.magFilter = VK_FILTER_LINEAR,
-			.minFilter = VK_FILTER_LINEAR,
-			.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
-			.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-			.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-			.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-			.mipLodBias = 0,
-			.anisotropyEnable = VK_TRUE,
-			.maxAnisotropy = properties.limits.maxSamplerAnisotropy,
-			.compareEnable = VK_FALSE,
-			.compareOp = VK_COMPARE_OP_ALWAYS,
-			.minLod = 0,
-			.maxLod = static_cast<float>(mipLevels),
-			.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK,
-			.unnormalizedCoordinates = VK_FALSE,
-		};
-		textureSampler = device->createSampler(&samplerInfo);
-	}
+    }
 
     void loadModel() {
         tinyobj::attrib_t attrib;
@@ -2399,7 +2494,7 @@ protected:
                 vertex.color = {1.0f, 1.0f, 1.0f};
 
                 if (uniqueVertices.count(vertex) == 0) {
-                    uniqueVertices[vertex] = static_cast<uint32_t>(vertices.size());
+                    uniqueVertices[vertex] = (uint32_t)vertices.size();
                     vertices.push_back(vertex);
                 }
 
@@ -2408,9 +2503,7 @@ protected:
         }
     }
 
-
 	void recreateSwapChain() {
-		
 #if 0 //hmm why are there multiple events?
 		int width = app->getScreenSize().x;
 		int height = app->getScreenSize().y;
@@ -2631,7 +2724,7 @@ protected:
 				.range = sizeof(UniformBufferObject),
 			};
 			auto imageInfo = VkDescriptorImageInfo{
-				.sampler = textureSampler,
+				.sampler = (*textureSampler)(),
 				.imageView = (*textureImageView)(),
 				.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
 			};
