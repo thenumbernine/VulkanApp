@@ -802,14 +802,15 @@ public:
 	// meanwhile all these return handles, not wrappers.
 CREATE_CREATER(Swapchain, KHR)
 CREATE_CREATER(RenderPass, )
+CREATE_CREATER(Buffer, )
+CREATE_CREATER(Sampler, )
+CREATE_CREATER(Image, )
 CREATE_CREATER(ImageView, )
 CREATE_CREATER(Framebuffer, )
 CREATE_CREATER(DescriptorSetLayout, )
 CREATE_CREATER(ShaderModule, )
 CREATE_CREATER(PipelineLayout, )
 CREATE_CREATER(CommandPool, )
-CREATE_CREATER(Buffer, )
-CREATE_CREATER(Sampler, )
 
 	VkPipeline createGraphicsPipelines(
 		VkPipelineCache pipelineCache,
@@ -1183,6 +1184,13 @@ public:
 	) : Super(handle_),
 		device(device_)
 	{}
+
+	VulkanImage(
+		VulkanDevice const * const device_,
+		VkImageCreateInfo const createInfo
+	) : Super(device_->createImage(&createInfo, getAllocator())),
+		device(device_)
+	{}
 };
 
 struct VulkanImageView : public VulkanHandle<VkImageView> {
@@ -1203,16 +1211,14 @@ public:
 		VulkanDevice const * const device_
 	) : Super(handle_),
 		device(device_)
-	{
-	}
+	{}
 
 	VulkanImageView(
 		VulkanDevice const * const device_,
 		VkImageViewCreateInfo const createInfo
-	) : device(device_) 
-	{
-		VULKAN_SAFE(vkCreateImageView, (*device)(), &createInfo, getAllocator(), &handle);
-	}
+	) : Super(device_->createImageView(&createInfo, getAllocator())),
+		device(device_) 
+	{}
 };
 
 struct VulkanBuffer : public VulkanHandle<VkBuffer> {
@@ -1229,6 +1235,13 @@ public:
 		VkBuffer handle_,
 		VulkanDevice const * const device_
 	) : Super(handle_),
+		device(device_)
+	{}
+
+	VulkanBuffer(
+		VulkanDevice const * const device_,
+		VkBufferCreateInfo const createInfo
+	) : Super(device_->createBuffer(&createInfo, getAllocator())),
 		device(device_)
 	{}
 };
@@ -1279,8 +1292,20 @@ struct VulkanDeviceMemoryBuffer : public VulkanDeviceMemoryParent<VulkanBuffer> 
 		VkDeviceSize size,
 		VkBufferUsageFlags usage,
 		VkMemoryPropertyFlags properties
-	) : Super({}, {}, device_) {
-
+	) 
+#if 0	// new	
+// TODO get	VulkanDeviceMemoryParent to pass-thru correctly
+	: Super(
+		device_,
+		VkBufferCreateInfo{
+			.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+			.size = size,
+			.usage = usage,
+			.sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+		}
+	) {
+#else 	//old
+	: Super({}, {}, device_) {
 		auto bufferInfo = VkBufferCreateInfo{
 			.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
 			.size = size,
@@ -1288,6 +1313,7 @@ struct VulkanDeviceMemoryBuffer : public VulkanDeviceMemoryParent<VulkanBuffer> 
 			.sharingMode = VK_SHARING_MODE_EXCLUSIVE,
 		};
 		Super::handle = device_->createBuffer(&bufferInfo);
+#endif
 
 		VkMemoryRequirements memRequirements = Super::getMemoryRequirements();
 		auto allocInfo = VkMemoryAllocateInfo{
@@ -1649,24 +1675,6 @@ public:
 		VkImageAspectFlags aspectFlags,
 		uint32_t mipLevels
 	) {
-#if 0		
-		auto viewInfo = VkImageViewCreateInfo{
-			.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-			.image = image,
-			.viewType = VK_IMAGE_VIEW_TYPE_2D,
-			.format = format,
-			.subresourceRange = {
-				.aspectMask = aspectFlags,
-				.baseMipLevel = 0,
-				.levelCount = mipLevels,
-				.baseArrayLayer = 0,
-				.layerCount = 1,
-			},
-		};
-		auto imageView = VkImageView{};
-		VULKAN_SAFE(vkCreateImageView, (*device)(), &viewInfo, getAllocator(), &imageView);
-		return imageView;
-#else
 		return std::make_unique<VulkanImageView>(
 			device,
 			VkImageViewCreateInfo{
@@ -1683,7 +1691,6 @@ public:
 				},
 			}
 		);
-#endif
 	}
 
 protected:
