@@ -331,8 +331,12 @@ struct VulkanInstance : public VulkanHandle<VkInstance> {
 	~VulkanInstance() {
 		if (handle) vkDestroyInstance(handle, getAllocator());
 	}
-	
 	VulkanInstance() {}
+	VulkanInstance(
+		VkInstanceCreateInfo const createInfo
+	) {
+		VULKAN_SAFE(vkCreateInstance, &createInfo, getAllocator(), &handle);
+	}
 
 	// TODO this is copied from the parent class
 	//  so I could put it in one place by make the parent CRTP and return this
@@ -442,6 +446,9 @@ struct ThisVulkanInstance : public VulkanInstance {
 		// vkCreateInstance needs extensions
 		auto extensions = getRequiredExtensions(app, enableValidationLayers);
 
+		// would be nice to do a parent-constructor-call here
+		//  but I can't move this into a static method that passes it into super
+		//  because the result uses pointers to other stack/temp objects
 		auto createInfo = VkInstanceCreateInfo{
 			.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
 			.pApplicationInfo = &appInfo,
@@ -452,8 +459,9 @@ struct ThisVulkanInstance : public VulkanInstance {
 		};
 		VULKAN_SAFE(vkCreateInstance, &createInfo, getAllocator(), &handle);
 	}
+
 protected:
-	std::vector<char const *> getRequiredExtensions(
+	static std::vector<char const *> getRequiredExtensions(
 		::SDLApp::SDLApp const * const app,
 		bool const enableValidationLayers
 	) {
@@ -673,15 +681,22 @@ struct VulkanPhysicalDevice : public VulkanHandle<VkPhysicalDevice> {
 			.presentModes = getSurfacePresentModes(surface)
 		};
 	}
+};
 
+struct ThisVulkanPhysicalDevice : public VulkanPhysicalDevice {
+	using Super = VulkanPhysicalDevice;
 	// ************** from here on down, app-specific **************  
 protected:
 	VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_1_BIT;
 public:
 	auto getMSAASamples() const { return msaaSamples; }
 
+	ThisVulkanPhysicalDevice(
+		Handle const handle
+	) : Super(handle) {}
+
 	// used by the application for specific physical device querying (should be a subclass of the general VulkanPhysicalDevice)
-	VulkanPhysicalDevice(
+	ThisVulkanPhysicalDevice(
 		VulkanInstance const * const instance,
 		VkSurfaceKHR surface,								// needed by isDeviceSuitable -> findQueueFamilie
 		std::vector<char const *> const & deviceExtensions	// needed by isDeviceSuitable -> checkDeviceExtensionSupport
@@ -701,7 +716,7 @@ public:
 		}
 
 		for (auto const & h : physDevs) {
-			auto o = VulkanPhysicalDevice(h);
+			auto o = ThisVulkanPhysicalDevice(h);
 			if (o.isDeviceSuitable(surface, deviceExtensions)) {
 				handle = h;
                 msaaSamples = getMaxUsableSampleCount();
@@ -798,6 +813,7 @@ public:
             VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT
         );
     }
+
 protected: 
 	VkFormat findSupportedFormat(
 		std::vector<VkFormat> const & candidates,
@@ -818,7 +834,6 @@ protected:
         }
         throw Common::Exception() << "failed to find supported format!";
     }
-
 };
 
 // validationLayers matches in checkValidationLayerSupport and initLogicalDevice
@@ -919,7 +934,7 @@ CREATE_CREATER(CommandPool, )
 	// ************** from here on down, app-specific **************  
 	
 	VulkanDevice(
-		VulkanPhysicalDevice const * const physicalDevice,
+		ThisVulkanPhysicalDevice const * const physicalDevice,
 		VulkanSurface const * const surface,
 		std::vector<char const *> const & deviceExtensions,
 		bool enableValidationLayers
@@ -977,7 +992,7 @@ public:
 	// ************** from here on down, app-specific **************  
 
 	VulkanRenderPass(
-		VulkanPhysicalDevice const * const physicalDevice,
+		ThisVulkanPhysicalDevice const * const physicalDevice,
 		VulkanDevice const * const device_,
 		VkFormat swapChainImageFormat
 	) : device(device_) {
@@ -1298,7 +1313,7 @@ public:
 		if (handle) vkDestroyCommandPool((*device)(), handle, getAllocator());
 	}
 	VulkanCommandPool(
-		VulkanPhysicalDevice const * const physicalDevice,
+		ThisVulkanPhysicalDevice const * const physicalDevice,
 		VulkanDevice const * const device_,
 		VkSurfaceKHR surface
 	) : device(device_) {
@@ -1747,7 +1762,7 @@ public:
 	
 	VulkanSwapChain(
 		Tensor::int2 screenSize,
-		VulkanPhysicalDevice const * const physicalDevice,
+		ThisVulkanPhysicalDevice const * const physicalDevice,
 		VulkanDevice const * const device_,
 		VulkanSurface const * const surface
 	) : device(device_) {
@@ -2050,7 +2065,7 @@ public:
 	}
 
 	VulkanGraphicsPipeline(
-		VulkanPhysicalDevice const * const physicalDevice,
+		ThisVulkanPhysicalDevice const * const physicalDevice,
 		VulkanDevice const * const device_,
 		VulkanRenderPass const * const renderPass
 	) : device(device_) {
@@ -2254,7 +2269,7 @@ protected:
 	};
 
 	//ok now we're at the point where we are recreating objects dependent on physicalDevice so
-	std::unique_ptr<VulkanPhysicalDevice> physicalDevice;
+	std::unique_ptr<ThisVulkanPhysicalDevice> physicalDevice;
 public:
 	VulkanCommon(::SDLApp::SDLApp const * const app_)
 	: app(app_) {
@@ -2273,7 +2288,7 @@ public:
 			app->getWindow(),
 			instance.get()
 		);
-		physicalDevice = std::make_unique<VulkanPhysicalDevice>(
+		physicalDevice = std::make_unique<ThisVulkanPhysicalDevice>(
 			instance.get(),
 			(*surface)(),
 			deviceExtensions
