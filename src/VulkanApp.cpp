@@ -1955,6 +1955,34 @@ struct VulkanDeviceStagingBuffer : public VulkanDeviceMemoryParent<VulkanBuffer>
 	}
 };
 
+struct VulkanDeviceMakeFromStagingBuffer : public VulkanDeviceStagingBuffer {
+	using Super = VulkanDeviceStagingBuffer;
+	using Super::Super;
+
+	VulkanDeviceMakeFromStagingBuffer(
+		VulkanPhysicalDevice const * const physicalDevice,
+		VulkanDevice const * const device,
+		void const * const srcData,
+		size_t bufferSize
+	) : Super(
+		physicalDevice,
+		device,
+		bufferSize
+	) {
+		void * dstData = {};
+		vkMapMemory(
+			(*device)(),
+			getMemory()(),
+			0,
+			bufferSize,
+			0,
+			&dstData
+		);
+		memcpy(dstData, srcData, (size_t)bufferSize);
+		vkUnmapMemory((*device)(), getMemory()());
+	}
+};
+
 struct VulkanDeviceMemoryBuffer : public VulkanDeviceMemoryParent<VulkanBuffer> {
 	using Super = VulkanDeviceMemoryParent<VulkanBuffer>;
 	using Super::Super;
@@ -1998,34 +2026,6 @@ struct VulkanDeviceMemoryBuffer : public VulkanDeviceMemoryParent<VulkanBuffer> 
 		bindMemory(Super::memory());
 	}
 
-	// TODO make a StagingBuffer subclass?
-	static auto makeFromStaged(
-		VulkanPhysicalDevice const * const physicalDevice,
-		VulkanDevice const * const device,
-		void const * const srcData,
-		size_t bufferSize
-	) {
-		auto stagingBuffer = VulkanDeviceStagingBuffer(
-			physicalDevice,
-			device,
-			bufferSize
-		);
-
-		void * dstData = {};
-		vkMapMemory(
-			(*device)(),
-			stagingBuffer.getMemory()(),
-			0,
-			bufferSize,
-			0,
-			&dstData
-		);
-		memcpy(dstData, srcData, (size_t)bufferSize);
-		vkUnmapMemory((*device)(), stagingBuffer.getMemory()());
-
-		return stagingBuffer;
-	}
-
 public:
 	static std::unique_ptr<VulkanDeviceMemoryBuffer> makeBufferFromStaged(
 		VulkanPhysicalDevice const * const physicalDevice,
@@ -2034,7 +2034,7 @@ public:
 		void const * const srcData,
 		size_t bufferSize
 	) {
-		auto stagingBuffer = makeFromStaged(
+		auto stagingBuffer = VulkanDeviceMakeFromStagingBuffer(
 			physicalDevice,
 			device,
 			srcData,
@@ -2074,7 +2074,7 @@ public:
 		int texHeight,
 		uint32_t mipLevels
 	) {
-		auto stagingBuffer = VulkanDeviceMemoryBuffer::makeFromStaged(
+		auto stagingBuffer = VulkanDeviceMakeFromStagingBuffer(
 			physicalDevice,
 			device,
 			srcData,
