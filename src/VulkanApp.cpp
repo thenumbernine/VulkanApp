@@ -586,6 +586,34 @@ struct VulkanQueue : public VulkanHandle<VkQueue> {
 		VULKAN_SAFE(vkQueueSubmit, handle, submitCount, pSubmits, fence);
 	}
 
+	template<
+		typename SubmitInfoType = std::array<VkSubmitInfo, 0>
+	>
+	void submit(
+		SubmitInfoType const & submits,
+		VkFence fence = VK_NULL_HANDLE
+	) const {
+		VULKAN_SAFE(vkQueueSubmit,
+			handle,
+			(uint32_t)submits.size(),
+			submits.data(),
+			fence
+		);
+	}
+
+	void submit(
+		VkSubmitInfo const submit,
+		VkFence fence = VK_NULL_HANDLE
+	) const {
+		VULKAN_SAFE(vkQueueSubmit,
+			handle,
+			1,
+			&submit,
+			fence
+		);
+
+	}
+
 	VkResult present(
 		VkPresentInfoKHR const * const pPresentInfo
 	) const {
@@ -1259,9 +1287,9 @@ public:
 		VkPipelineStageFlags const srcStageMask,
 		VkPipelineStageFlags const dstStageMask,
 		VkDependencyFlags const dependencyFlags,
-		MemoryBarrierType memBarriers,
-		BufferMemoryBarrierType bufferMemBarriers,
-		ImageMemoryBarrierType imageMemBarriers
+		MemoryBarrierType const & memBarriers,
+		BufferMemoryBarrierType const & bufferMemBarriers,
+		ImageMemoryBarrierType const & imageMemBarriers
 	) const {
 		vkCmdPipelineBarrier(
 			(*this)(),
@@ -1305,13 +1333,12 @@ struct VulkanSingleTimeCommand : public VulkanCommandBuffer {
 	
 	~VulkanSingleTimeCommand() {
 		VULKAN_SAFE(vkEndCommandBuffer, handle);
-		auto submitInfo = VkSubmitInfo{
+		auto queue = device->getGraphicsQueue();
+		queue->submit(VkSubmitInfo{
 			.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
 			.commandBufferCount = 1,
 			.pCommandBuffers = &handle,
-		};
-		auto queue = device->getGraphicsQueue();
-		queue->submit(1, &submitInfo);
+		});
 		queue->waitIdle();
 	}
 };
