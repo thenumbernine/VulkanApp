@@ -324,7 +324,6 @@ public:
 template<typename... Args>
 using VulkanHandle = vk::Wrapper<Args...>;
 
-
 struct VulkanInstance : public VulkanHandle<VkInstance> {
 	using Super = VulkanHandle<VkInstance>;
 	
@@ -367,121 +366,6 @@ struct VulkanInstance : public VulkanHandle<VkInstance> {
 			NAME_PAIR(vkEnumeratePhysicalDevices),
 			(*this)()
 		);
-	}
-};
-
-// so this doesn't add any fields/methods
-// and in fact it's designed to hand off its handle to a VulkanInstance class
-struct ThisVulkanInstance : public VulkanInstance {
-	using Super = VulkanInstance;
-
-	//copied from parent ...
-#if 1	
-	ThisVulkanInstance(Handle const handle_) 
-	: Super(handle_) {}
-	ThisVulkanInstance(ThisVulkanInstance && rhs) 
-	: Super(rhs.handle) { 
-		rhs.handle = {}; 
-	}
-	ThisVulkanInstance & operator=(ThisVulkanInstance && rhs) {
-		if (this != &rhs) {
-			handle = rhs.handle;
-			rhs.handle = {};
-		}
-		return *this;
-	}
-	ThisVulkanInstance(ThisVulkanInstance const & rhs) = delete;
-	ThisVulkanInstance & operator=(ThisVulkanInstance const & rhs) = delete;
-#endif
-
-	// ************** from here on down, app-specific **************  
-
-	// this does result in vkCreateInstance, 
-	//  but the way it gest there is very application-specific
-	ThisVulkanInstance(
-		::SDLApp::SDLApp const * const app,
-		bool const enableValidationLayers
-	) {
-		// debug output
-
-		{
-#if 1
-			auto availableLayers = vulkanEnum<VkLayerProperties>(
-				NAME_PAIR(vkEnumerateInstanceLayerProperties)
-			);
-#else
-			std::vector<VkLayerProperties> availableLayers = VULKAN_ENUM_SAFE(
-				VkLayerProperties,
-				vkEnumerateInstanceLayerProperties,
-				std::make_tuple()
-			);
-#endif
-			std::cout << "vulkan layers:" << std::endl;
-			for (auto const & layer : availableLayers) {
-				std::cout << "\t" << layer.layerName << std::endl;
-			}
-		}
-
-		// VkApplicationInfo needs title:
-		auto title = app->getTitle();
-		
-		// vkCreateInstance needs appInfo
-		auto appInfo = VkApplicationInfo{
-			.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
-			.pApplicationName = title.c_str(),
-			.applicationVersion = VK_MAKE_VERSION(1, 0, 0),
-			.pEngineName = "No Engine",
-			.engineVersion = VK_MAKE_VERSION(1, 0, 0),
-			.apiVersion = VK_API_VERSION_1_0,
-		};
-
-		// vkCreateInstance needs layerNames
-		std::vector<char const *> layerNames;
-		if (enableValidationLayers) {
-			//insert which of those into our layerName for creating something or something
-			//layerNames.push_back("VK_LAYER_LUNARG_standard_validation");	//nope
-			layerNames.push_back("VK_LAYER_KHRONOS_validation");	//nope
-		}
-		
-		// vkCreateInstance needs extensions
-		auto extensions = getRequiredExtensions(app, enableValidationLayers);
-
-		// would be nice to do a parent-constructor-call here
-		//  but I can't move this into a static method that passes it into super
-		//  because the result uses pointers to other stack/temp objects
-		auto createInfo = VkInstanceCreateInfo{
-			.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
-			.pApplicationInfo = &appInfo,
-			.enabledLayerCount = (uint32_t)layerNames.size(),
-			.ppEnabledLayerNames = layerNames.data(),
-			.enabledExtensionCount = (uint32_t)extensions.size(),
-			.ppEnabledExtensionNames = extensions.data(),
-		};
-		VULKAN_SAFE(vkCreateInstance, &createInfo, getAllocator(), &handle);
-	}
-
-protected:
-	static std::vector<char const *> getRequiredExtensions(
-		::SDLApp::SDLApp const * const app,
-		bool const enableValidationLayers
-	) {
-		// TODO vulkanEnumSDL ?  or just test the return-type for the SDL return type? (assuming it's not the same as the Vulkan return type ...)
-		auto extensionCount = uint32_t{};
-		SDL_VULKAN_SAFE(SDL_Vulkan_GetInstanceExtensions, app->getWindow(), &extensionCount, nullptr);
-		std::vector<char const *> extensions(extensionCount);
-		SDL_VULKAN_SAFE(SDL_Vulkan_GetInstanceExtensions, app->getWindow(), &extensionCount, extensions.data());
-
-		//debugging:
-		std::cout << "vulkan extensions:" << std::endl;
-		for (auto const & ext : extensions) {
-			std::cout << "\t" << ext << std::endl;
-		}
-
-		if (enableValidationLayers) {
-			extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-		}
-
-		return extensions;
 	}
 };
 
@@ -683,9 +567,151 @@ struct VulkanPhysicalDevice : public VulkanHandle<VkPhysicalDevice> {
 	}
 };
 
+struct VulkanQueue : public VulkanHandle<VkQueue> {
+	using Super = VulkanHandle<VkQueue>;
+	using Super::Super;
+	
+	void waitIdle() const {
+		VULKAN_SAFE(vkQueueWaitIdle, (*this)());
+	}
+
+	// see, no pass-by-copy.
+	// this class is a harmless wrapper so far.
+	// in fact (hmm) should I even throw results or should I return them?  100% wrapper.
+	void submit(
+		uint32_t submitCount,
+		VkSubmitInfo const * const pSubmits,
+		VkFence fence = VK_NULL_HANDLE
+	) const {
+		VULKAN_SAFE(vkQueueSubmit, handle, submitCount, pSubmits, fence);
+	}
+
+	VkResult present(
+		VkPresentInfoKHR const * const pPresentInfo
+	) const {
+		return vkQueuePresentKHR(handle, pPresentInfo);
+	}
+};
+
+
+// ************** from here on down, app-specific **************  
+
+
+// so this doesn't add any fields/methods
+// and in fact it's designed to hand off its handle to a VulkanInstance class
+struct ThisVulkanInstance : public VulkanInstance {
+	using Super = VulkanInstance;
+
+	//copied from parent ...
+#if 1	
+	ThisVulkanInstance(Handle const handle_) 
+	: Super(handle_) {}
+	ThisVulkanInstance(ThisVulkanInstance && rhs) 
+	: Super(rhs.handle) { 
+		rhs.handle = {}; 
+	}
+	ThisVulkanInstance & operator=(ThisVulkanInstance && rhs) {
+		if (this != &rhs) {
+			handle = rhs.handle;
+			rhs.handle = {};
+		}
+		return *this;
+	}
+	ThisVulkanInstance(ThisVulkanInstance const & rhs) = delete;
+	ThisVulkanInstance & operator=(ThisVulkanInstance const & rhs) = delete;
+#endif
+
+	// this does result in vkCreateInstance, 
+	//  but the way it gest there is very application-specific
+	ThisVulkanInstance(
+		::SDLApp::SDLApp const * const app,
+		bool const enableValidationLayers
+	) {
+		// debug output
+
+		{
+#if 1
+			auto availableLayers = vulkanEnum<VkLayerProperties>(
+				NAME_PAIR(vkEnumerateInstanceLayerProperties)
+			);
+#else
+			std::vector<VkLayerProperties> availableLayers = VULKAN_ENUM_SAFE(
+				VkLayerProperties,
+				vkEnumerateInstanceLayerProperties,
+				std::make_tuple()
+			);
+#endif
+			std::cout << "vulkan layers:" << std::endl;
+			for (auto const & layer : availableLayers) {
+				std::cout << "\t" << layer.layerName << std::endl;
+			}
+		}
+
+		// VkApplicationInfo needs title:
+		auto title = app->getTitle();
+		
+		// vkCreateInstance needs appInfo
+		auto appInfo = VkApplicationInfo{
+			.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
+			.pApplicationName = title.c_str(),
+			.applicationVersion = VK_MAKE_VERSION(1, 0, 0),
+			.pEngineName = "No Engine",
+			.engineVersion = VK_MAKE_VERSION(1, 0, 0),
+			.apiVersion = VK_API_VERSION_1_0,
+		};
+
+		// vkCreateInstance needs layerNames
+		std::vector<char const *> layerNames;
+		if (enableValidationLayers) {
+			//insert which of those into our layerName for creating something or something
+			//layerNames.push_back("VK_LAYER_LUNARG_standard_validation");	//nope
+			layerNames.push_back("VK_LAYER_KHRONOS_validation");	//nope
+		}
+		
+		// vkCreateInstance needs extensions
+		auto extensions = getRequiredExtensions(app, enableValidationLayers);
+
+		// would be nice to do a parent-constructor-call here
+		//  but I can't move this into a static method that passes it into super
+		//  because the result uses pointers to other stack/temp objects
+		auto createInfo = VkInstanceCreateInfo{
+			.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+			.pApplicationInfo = &appInfo,
+			.enabledLayerCount = (uint32_t)layerNames.size(),
+			.ppEnabledLayerNames = layerNames.data(),
+			.enabledExtensionCount = (uint32_t)extensions.size(),
+			.ppEnabledExtensionNames = extensions.data(),
+		};
+		VULKAN_SAFE(vkCreateInstance, &createInfo, getAllocator(), &handle);
+	}
+
+protected:
+	static std::vector<char const *> getRequiredExtensions(
+		::SDLApp::SDLApp const * const app,
+		bool const enableValidationLayers
+	) {
+		// TODO vulkanEnumSDL ?  or just test the return-type for the SDL return type? (assuming it's not the same as the Vulkan return type ...)
+		auto extensionCount = uint32_t{};
+		SDL_VULKAN_SAFE(SDL_Vulkan_GetInstanceExtensions, app->getWindow(), &extensionCount, nullptr);
+		std::vector<char const *> extensions(extensionCount);
+		SDL_VULKAN_SAFE(SDL_Vulkan_GetInstanceExtensions, app->getWindow(), &extensionCount, extensions.data());
+
+		//debugging:
+		std::cout << "vulkan extensions:" << std::endl;
+		for (auto const & ext : extensions) {
+			std::cout << "\t" << ext << std::endl;
+		}
+
+		if (enableValidationLayers) {
+			extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+		}
+
+		return extensions;
+	}
+};
+
 struct ThisVulkanPhysicalDevice : public VulkanPhysicalDevice {
 	using Super = VulkanPhysicalDevice;
-	// ************** from here on down, app-specific **************  
 protected:
 	VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_1_BIT;
 public:
@@ -839,32 +865,6 @@ protected:
 // validationLayers matches in checkValidationLayerSupport and initLogicalDevice
 std::vector<char const *> validationLayers = {
 	"VK_LAYER_KHRONOS_validation"
-};
-
-struct VulkanQueue : public VulkanHandle<VkQueue> {
-	using Super = VulkanHandle<VkQueue>;
-	using Super::Super;
-	
-	void waitIdle() const {
-		VULKAN_SAFE(vkQueueWaitIdle, (*this)());
-	}
-
-	// see, no pass-by-copy.
-	// this class is a harmless wrapper so far.
-	// in fact (hmm) should I even throw results or should I return them?  100% wrapper.
-	void submit(
-		uint32_t submitCount,
-		VkSubmitInfo const * const pSubmits,
-		VkFence fence = VK_NULL_HANDLE
-	) const {
-		VULKAN_SAFE(vkQueueSubmit, handle, submitCount, pSubmits, fence);
-	}
-
-	VkResult present(
-		VkPresentInfoKHR const * const pPresentInfo
-	) const {
-		return vkQueuePresentKHR(handle, pPresentInfo);
-	}
 };
 
 struct VulkanDevice : public VulkanHandle<VkDevice> {
@@ -1236,19 +1236,24 @@ public:
 		);
 	}
 
-#if 0	
 	// TODO but dont use vector args cuz thats needless allocs
 	// try to do array args, but that makes empty arrays {} fail to type-deduce ...
 	// hmm another way is to template a tuple, then lambda iterate across it, 
 	//  and fill out memBarriers, bufferMemBarriers, imageMemBarriers according to the types found ...
 	// might be cumbersome ...
+	template<
+		// have the array type default to an empty array so an empty initailizer list will work as an empty array
+		typename MemoryBarrierType = std::array<VkMemoryBarrier, 0>,
+		typename BufferMemoryBarrierType = std::array<VkBufferMemoryBarrier, 0>,
+		typename ImageMemoryBarrierType = std::array<VkImageMemoryBarrier, 0>
+	>
 	void pipelineBarrier(
 		VkPipelineStageFlags const srcStageMask,
 		VkPipelineStageFlags const dstStageMask,
 		VkDependencyFlags const dependencyFlags,
-		std::array<VkMemoryBarrier> memBarriers,
-		std::array<VkBufferMemoryBarrier> bufferMemBarriers,
-		std::array<VkImageMemoryBarrier> imageMemBarriers
+		MemoryBarrierType memBarriers,
+		BufferMemoryBarrierType bufferMemBarriers,
+		ImageMemoryBarrierType imageMemBarriers
 	) const {
 		vkCmdPipelineBarrier(
 			(*this)(),
@@ -1263,7 +1268,6 @@ public:
 			imageMemBarriers.data()
 		);
 	}
-#endif
 };
 
 struct VulkanSingleTimeCommand : public VulkanCommandBuffer {
@@ -1419,17 +1423,13 @@ public:
 			throw std::invalid_argument("unsupported layout transition!");
 		}
 
-		vkCmdPipelineBarrier(
-			commandBuffer(),
+		commandBuffer.pipelineBarrier(
 			sourceStage,
 			destinationStage,
 			0,
-			0,
-			nullptr,
-			0,
-			nullptr,
-			1,
-			&barrier
+			{},
+			{},
+			Common::make_array(barrier)
 		);
 	}
 };
@@ -2501,17 +2501,13 @@ protected:
             barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
             barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
 
-            vkCmdPipelineBarrier(
-				commandBuffer(),
+			commandBuffer.pipelineBarrier(
                 VK_PIPELINE_STAGE_TRANSFER_BIT,
 				VK_PIPELINE_STAGE_TRANSFER_BIT,
 				0,
-                0,
-				nullptr,
-                0,
-				nullptr,
-                1,
-				&barrier
+                {},
+                {},
+				Common::make_array(barrier)
 			);
 
             auto blit = VkImageBlit{
@@ -2555,17 +2551,13 @@ protected:
             barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
             barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
-            vkCmdPipelineBarrier(
-				commandBuffer(),
+			commandBuffer.pipelineBarrier(
                 VK_PIPELINE_STAGE_TRANSFER_BIT,
 				VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
 				0,
-                0,
-				nullptr,
-                0,
-				nullptr,
-                1,
-				&barrier
+                {},
+                {},
+				Common::make_array(barrier)
 			);
 
             if (mipWidth > 1) mipWidth /= 2;
@@ -2578,17 +2570,13 @@ protected:
         barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
-        vkCmdPipelineBarrier(
-			commandBuffer(),
+		commandBuffer.pipelineBarrier(
             VK_PIPELINE_STAGE_TRANSFER_BIT,
 			VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
 			0,
-            0,
-			nullptr,
-            0,
-			nullptr,
-            1,
-			&barrier
+            {},
+            {},
+			Common::make_array(barrier)
 		);
     }
 
