@@ -343,15 +343,16 @@ using VulkanHandle = vk::Wrapper<Args...>;
 
 struct VulkanInstance : public VulkanHandle<VkInstance> {
 	using Super = VulkanHandle<VkInstance>;
-	
+	using CreateInfo = VkInstanceCreateInfo;
+
 	~VulkanInstance() {
 		if (handle) vkDestroyInstance(handle, getAllocator());
 	}
 	VulkanInstance() {}
 	VulkanInstance(
-		VkInstanceCreateInfo const createInfo
+		CreateInfo const info
 	) {
-		VULKAN_SAFE(vkCreateInstance, &createInfo, getAllocator(), &handle);
+		VULKAN_SAFE(vkCreateInstance, &info, getAllocator(), &handle);
 	}
 
 	// TODO this is copied from the parent class
@@ -598,7 +599,36 @@ struct VulkanPhysicalDevice : public VulkanHandle<VkPhysicalDevice> {
 struct VulkanQueue : public VulkanHandle<VkQueue> {
 	using Super = VulkanHandle<VkQueue>;
 	using Super::Super;
-	
+
+#if 1
+	VulkanQueue(Handle const handle_)
+	: Super(handle_) {}
+	VulkanQueue(VulkanQueue && o)
+	: Super(o.handle) {
+		o.handle = {};
+	}
+	VulkanQueue & operator=(VulkanQueue && o) {
+		if (this != &o) {
+			handle = o.handle;
+			o.handle = {};
+		}
+		return *this;
+	}
+	VulkanQueue(VulkanQueue & o)
+	: Super(o.handle) {
+		o.handle = {};
+	}
+	VulkanQueue & operator=(VulkanQueue & o) {
+		if (this != &o) {
+			handle = o.handle;
+			o.handle = {};
+		}
+		return *this;
+	}
+	VulkanQueue(VulkanQueue const & o) = delete;
+	VulkanQueue & operator=(VulkanQueue const & o) = delete;
+#endif
+
 	void waitIdle() const {
 		VULKAN_SAFE(vkQueueWaitIdle, (*this)());
 	}
@@ -639,7 +669,6 @@ struct VulkanQueue : public VulkanHandle<VkQueue> {
 			&submit,
 			fence
 		);
-
 	}
 
 	VkResult present(
@@ -937,11 +966,11 @@ std::vector<char const *> validationLayers = {
 struct VulkanDevice : public VulkanHandle<VkDevice> {
 	using Super = VulkanHandle<VkDevice>;
 protected:
-	std::unique_ptr<VulkanQueue> graphicsQueue;
-	std::unique_ptr<VulkanQueue> presentQueue;
+	VulkanQueue graphicsQueue;
+	VulkanQueue presentQueue;
 public:
-	VulkanQueue const * getGraphicsQueue() const { return graphicsQueue.get(); }
-	VulkanQueue const * getPresentQueue() const { return presentQueue.get(); }
+	VulkanQueue const & getGraphicsQueue() const { return graphicsQueue; }
+	VulkanQueue const & getPresentQueue() const { return presentQueue; }
 	
 	~VulkanDevice() {
 		if (handle) vkDestroyDevice(handle, getAllocator());
@@ -1074,25 +1103,20 @@ CREATE_CREATER(CommandPool, )
 		auto deviceFeatures = VkPhysicalDeviceFeatures{
 			.samplerAnisotropy = VK_TRUE,
 		};
-
 		auto createInfo = VkDeviceCreateInfo{
 			.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
 			.queueCreateInfoCount = (uint32_t)queueCreateInfos.size(),
 			.pQueueCreateInfos = queueCreateInfos.data(),
+			.enabledLayerCount = enableValidationLayers ? (uint32_t)validationLayers.size() : 0,
+			.ppEnabledLayerNames = enableValidationLayers ? validationLayers.data() : nullptr,
 			.enabledExtensionCount = (uint32_t)deviceExtensions.size(),
 			.ppEnabledExtensionNames = deviceExtensions.data(),
 			.pEnabledFeatures = &deviceFeatures,
 		};
-		if (enableValidationLayers) {
-			createInfo.enabledLayerCount = (uint32_t)validationLayers.size();
-			createInfo.ppEnabledLayerNames = validationLayers.data();
-		} else {
-			createInfo.enabledLayerCount = 0;
-		}
 		handle = physicalDevice->createDevice(&createInfo);
 	
-		graphicsQueue = std::make_unique<VulkanQueue>(getQueue(indices.graphicsFamily.value()));
-		presentQueue = std::make_unique<VulkanQueue>(getQueue(indices.presentFamily.value()));
+		graphicsQueue = VulkanQueue(getQueue(indices.graphicsFamily.value()));
+		presentQueue = VulkanQueue(getQueue(indices.presentFamily.value()));
 	}
 };
 
@@ -1196,6 +1220,7 @@ public:
 
 struct VulkanBuffer : public VulkanHandle<VkBuffer> {
 	using Super = VulkanHandle<VkBuffer>;
+	using CreateInfo = VkBufferCreateInfo;
 protected:
 	//holds
 	VulkanDevice const * device = {};
@@ -1241,7 +1266,7 @@ public:
 
 	VulkanBuffer(
 		VulkanDevice const * const device_,
-		VkBufferCreateInfo const info
+		CreateInfo const info
 	) : Super(device_->createBuffer(&info, getAllocator())),
 		device(device_)
 	{}
@@ -1322,6 +1347,7 @@ ok i've got
 */
 struct VulkanImage : public VulkanHandle<VkImage> {
 	using Super = VulkanHandle<VkImage>;
+	using CreateInfo = VkImageCreateInfo;
 protected:
 	//holds
 	VulkanDevice const * const device = {};
@@ -1339,8 +1365,8 @@ public:
 
 	VulkanImage(
 		VulkanDevice const * const device_,
-		VkImageCreateInfo const createInfo
-	) : Super(device_->createImage(&createInfo, getAllocator())),
+		CreateInfo const info
+	) : Super(device_->createImage(&info, getAllocator())),
 		device(device_)
 	{}
 
@@ -1388,6 +1414,7 @@ public:
 
 struct VulkanImageView : public VulkanHandle<VkImageView> {
 	using Super = VulkanHandle<VkImageView>;
+	using CreateInfo = VkImageViewCreateInfo;
 protected:
 	//holds
 	VulkanDevice const * device = {};
@@ -1408,14 +1435,15 @@ public:
 
 	VulkanImageView(
 		VulkanDevice const * const device_,
-		VkImageViewCreateInfo const createInfo
-	) : Super(device_->createImageView(&createInfo, getAllocator())),
+		CreateInfo const info
+	) : Super(device_->createImageView(&info, getAllocator())),
 		device(device_)
 	{}
 };
 
 struct VulkanSampler : public VulkanHandle<VkSampler> {
 	using Super = VulkanHandle<VkSampler>;
+	using CreateInfo = VkSamplerCreateInfo;
 protected:
 	//holds
 	VulkanDevice const * device = {};
@@ -1433,8 +1461,8 @@ public:
 
 	VulkanSampler(
 		VulkanDevice const * const device_,
-		VkSamplerCreateInfo const createInfo
-	) : Super(device_->createSampler(&createInfo, getAllocator())),
+		CreateInfo const info
+	) : Super(device_->createSampler(&info, getAllocator())),
 		device(device_)
 	{}
 };
@@ -1744,17 +1772,19 @@ struct VulkanSingleTimeCommand : public VulkanCommandBuffer {
 	
 	~VulkanSingleTimeCommand() {
 		end();
-		auto queue = device->getGraphicsQueue();
-		queue->submit(VkSubmitInfo{
+		auto const & queue = device->getGraphicsQueue();
+		queue.submit(VkSubmitInfo{
 			.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
 			.commandBufferCount = 1,
 			.pCommandBuffers = &handle,
 		});
-		queue->waitIdle();
+		queue.waitIdle();
 	}
 };
 
 struct VulkanCommandPool : public VulkanHandle<VkCommandPool> {
+	using Super = VulkanHandle<VkCommandPool>;
+	using CreateInfo = VkCommandPoolCreateInfo;
 protected:
 	//held:
 	VulkanDevice const * const device = {};
@@ -1763,18 +1793,11 @@ public:
 		if (handle) vkDestroyCommandPool((*device)(), handle, getAllocator());
 	}
 	VulkanCommandPool(
-		ThisVulkanPhysicalDevice const * const physicalDevice,
 		VulkanDevice const * const device_,
-		VkSurfaceKHR surface
-	) : device(device_) {
-		auto queueFamilyIndices = physicalDevice->findQueueFamilies(surface);
-		auto poolInfo = VkCommandPoolCreateInfo{
-			.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
-			.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
-			.queueFamilyIndex = queueFamilyIndices.graphicsFamily.value(),
-		};
-		handle = device_->createCommandPool(&poolInfo);
-	}
+		CreateInfo const info
+	) : Super(device_->createCommandPool(&info)),
+		device(device_) 
+	{}
 
 	//copies based on the graphicsQueue
 	// used by makeBufferFromStaged
@@ -2730,12 +2753,19 @@ public:
 			device.get(),
 			swapChain->getRenderPass()
 		);
-		commandPool = std::make_unique<VulkanCommandPool>(
-			physicalDevice.get(),
-			device.get(),
-			(*surface)()
-		);
-	
+		
+		{
+			auto queueFamilyIndices = physicalDevice->findQueueFamilies((*surface)());
+			commandPool = std::make_unique<VulkanCommandPool>(
+				device.get(),
+				VkCommandPoolCreateInfo{
+					.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+					.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+					.queueFamilyIndex = queueFamilyIndices.graphicsFamily.value(),
+				}
+			);
+		}
+		
 		createTextureImage();
        
 		textureImageView = swapChain->createImageView(
@@ -2769,10 +2799,41 @@ public:
 
 		loadModel();
 		
-		initVertexBuffer();
-		initIndexBuffer();
-		initUniformBuffers();
-		
+		vertexBuffer = VulkanDeviceMemoryBuffer::makeBufferFromStaged(
+			physicalDevice.get(),
+			device.get(),
+			commandPool.get(),
+			vertices.data(),
+			sizeof(vertices[0]) * vertices.size()
+		);
+
+		indexBuffer = VulkanDeviceMemoryBuffer::makeBufferFromStaged(
+			physicalDevice.get(),
+			device.get(),
+			commandPool.get(),
+			indices.data(),
+			sizeof(indices[0]) * indices.size()
+		);
+
+		uniformBuffersMapped.resize(maxFramesInFlight);
+		for (size_t i = 0; i < maxFramesInFlight; i++) {
+			uniformBuffers.push_back(std::make_unique<VulkanDeviceMemoryBuffer>(
+				physicalDevice.get(),
+				device.get(),
+				sizeof(UniformBufferObject),
+				VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+			));
+			vkMapMemory(
+				(*device)(),
+				uniformBuffers[i]->getMemory()(),
+				0,
+				sizeof(UniformBufferObject),
+				0,
+				&uniformBuffersMapped[i]
+			);
+		}
+
 		descriptorPool = std::make_unique<VulkanDescriptorPool>(
 			device.get(),
 			(uint32_t)maxFramesInFlight
@@ -3048,66 +3109,17 @@ protected:
 			glfwWaitEvents();
 		}
 #else
-		if (!app->getScreenSize().x ||
-			!app->getScreenSize().y)
-		{
+		if (!app->getScreenSize().x || !app->getScreenSize().y) {
 			throw Common::Exception() << "here";
 		}
 #endif
 		device->waitIdle();
-
 		swapChain = std::make_unique<VulkanSwapChain>(
 			app->getScreenSize(),
 			physicalDevice.get(),
 			device.get(),
 			surface.get()
 		);
-	}
-
-	void initVertexBuffer() {
-		vertexBuffer = VulkanDeviceMemoryBuffer::makeBufferFromStaged(
-			physicalDevice.get(),
-			device.get(),
-			commandPool.get(),
-			vertices.data(),
-			sizeof(vertices[0]) * vertices.size()
-		);
-	}
-
-	void initIndexBuffer() {
-		indexBuffer = VulkanDeviceMemoryBuffer::makeBufferFromStaged(
-			physicalDevice.get(),
-			device.get(),
-			commandPool.get(),
-			indices.data(),
-			sizeof(indices[0]) * indices.size()
-		);
-	}
-
-	void initUniformBuffers() {
-		VkDeviceSize bufferSize = sizeof(UniformBufferObject);
-
-		uniformBuffers.resize(maxFramesInFlight);
-		uniformBuffersMapped.resize(maxFramesInFlight);
-
-		for (size_t i = 0; i < maxFramesInFlight; i++) {
-			uniformBuffers[i] = std::make_unique<VulkanDeviceMemoryBuffer>(
-				physicalDevice.get(),
-				device.get(),
-				bufferSize,
-				VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
-			);
-			
-			vkMapMemory(
-				(*device)(),
-				uniformBuffers[i]->getMemory()(),
-				0,
-				bufferSize,
-				0,
-				&uniformBuffersMapped[i]
-			);
-		}
 	}
 
 	void initCommandBuffers() {
@@ -3426,7 +3438,7 @@ public:
 			.signalSemaphoreCount = (uint32_t)signalSemaphores.size(),
 			.pSignalSemaphores = signalSemaphores.data(),
 		};
-		device->getGraphicsQueue()->submit(1, &submitInfo, inFlightFences[currentFrame]);
+		device->getGraphicsQueue().submit(1, &submitInfo, inFlightFences[currentFrame]);
 		
 		auto swapChains = Common::make_array<VkSwapchainKHR>(
 			(*swapChain)()
@@ -3441,7 +3453,7 @@ public:
 			.pSwapchains = swapChains.data(),
 			.pImageIndices = &imageIndex,
 		};
-		result = device->getPresentQueue()->present(&presentInfo);
+		result = device->getPresentQueue().present(&presentInfo);
 		if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized) {
 			framebufferResized = false;
 			recreateSwapChain();
@@ -3468,10 +3480,12 @@ protected:
 		vkCommon = std::make_unique<VulkanCommon>(this);
 	}
 
+public:
 	virtual std::string getTitle() const {
 		return "Vulkan Test";
 	}
-	
+
+protected:
 	virtual Uint32 getSDLCreateWindowFlags() {
 		auto flags = Super::getSDLCreateWindowFlags();
 		flags |= SDL_WINDOW_VULKAN;
