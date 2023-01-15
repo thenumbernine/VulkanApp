@@ -1137,6 +1137,35 @@ public:
 			&region
 		);
 	}
+
+#if 0	
+	// TODO but dont use vector args cuz thats needless allocs
+	// try to do array args, but that makes empty arrays {} fail to type-deduce ...
+	// hmm another way is to template a tuple, then lambda iterate across it, 
+	//  and fill out memBarriers, bufferMemBarriers, imageMemBarriers according to the types found ...
+	// might be cumbersome ...
+	void pipelineBarrier(
+		VkPipelineStageFlags const srcStageMask,
+		VkPipelineStageFlags const dstStageMask,
+		VkDependencyFlags const dependencyFlags,
+		std::array<VkMemoryBarrier> memBarriers,
+		std::array<VkBufferMemoryBarrier> bufferMemBarriers,
+		std::array<VkImageMemoryBarrier> imageMemBarriers
+	) const {
+		vkCmdPipelineBarrier(
+			(*this)(),
+			srcStageMask,
+			dstStageMask,
+			dependencyFlags,
+			(uint32_t)memBarriers.size(),
+			memBarriers.data(),
+			(uint32_t)bufferMemBarriers.size(),
+			bufferMemBarriers.data(),
+			(uint32_t)imageMemBarriers.size(),
+			imageMemBarriers.data()
+		);
+	}
+#endif
 };
 
 struct VulkanSingleTimeCommand : public VulkanCommandBuffer {
