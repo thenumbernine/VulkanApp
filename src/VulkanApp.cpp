@@ -1904,7 +1904,7 @@ public:
 	}
 };
 
-// methods common to VkBuffer and VkImage paired with VkDeviceMemory
+// methods common to VkBuffer or VkImage paired with VkDeviceMemory
 template<typename Super_>
 struct VulkanDeviceMemoryParent  : public Super_ {
 	using Super = Super_;
@@ -1924,6 +1924,15 @@ public:
 		memory(memory_, device_),
 		device(device_)
 	{}
+
+	VulkanDeviceMemoryParent(
+		VulkanDevice const * const device_,
+		Super::CreateInfo const info,
+		VkDeviceMemory memory_
+	) : Super(device_, info),
+		memory(memory_, device_),
+		device(device_)
+	{}
 };
 
 struct VulkanDeviceMakeFromStagingBuffer : public VulkanDeviceMemoryParent<VulkanBuffer> {
@@ -1935,22 +1944,24 @@ struct VulkanDeviceMakeFromStagingBuffer : public VulkanDeviceMemoryParent<Vulka
 		VulkanDevice const * const device_,
 		void const * const srcData,
 		size_t bufferSize
-	) : Super({}, {}, device_) {
-		VkBufferUsageFlags usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-		VkMemoryPropertyFlags properties = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-		auto bufferInfo = VkBufferCreateInfo{
+	) : Super(
+		device_,
+		VkBufferCreateInfo{
 			.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
 			.size = bufferSize,
-			.usage = usage,
+			.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
 			.sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-		};
-		Super::handle = device_->createBuffer(&bufferInfo);
-
+		},
+		{}
+	) {
 		auto memRequirements = Super::getMemoryRequirements();
 		Super::memory = VulkanDeviceMemory(device, VkMemoryAllocateInfo{
 			.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
 			.allocationSize = memRequirements.size,
-			.memoryTypeIndex = physicalDevice->findMemoryType(memRequirements.memoryTypeBits, properties),
+			.memoryTypeIndex = physicalDevice->findMemoryType(
+				memRequirements.memoryTypeBits,
+				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+			),
 		});
 		bindMemory(Super::memory());
 
