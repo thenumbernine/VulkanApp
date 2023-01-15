@@ -1926,20 +1926,21 @@ public:
 	{}
 };
 
-struct VulkanDeviceStagingBuffer : public VulkanDeviceMemoryParent<VulkanBuffer> {
+struct VulkanDeviceMakeFromStagingBuffer : public VulkanDeviceMemoryParent<VulkanBuffer> {
 	using Super = VulkanDeviceMemoryParent<VulkanBuffer>;
 	using Super::Super;
 
-	VulkanDeviceStagingBuffer(
+	VulkanDeviceMakeFromStagingBuffer(
 		VulkanPhysicalDevice const * const physicalDevice,
 		VulkanDevice const * const device_,
-		VkDeviceSize size
+		void const * const srcData,
+		size_t bufferSize
 	) : Super({}, {}, device_) {
 		VkBufferUsageFlags usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 		VkMemoryPropertyFlags properties = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
 		auto bufferInfo = VkBufferCreateInfo{
 			.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-			.size = size,
+			.size = bufferSize,
 			.usage = usage,
 			.sharingMode = VK_SHARING_MODE_EXCLUSIVE,
 		};
@@ -1952,23 +1953,7 @@ struct VulkanDeviceStagingBuffer : public VulkanDeviceMemoryParent<VulkanBuffer>
 			.memoryTypeIndex = physicalDevice->findMemoryType(memRequirements.memoryTypeBits, properties),
 		});
 		bindMemory(Super::memory());
-	}
-};
 
-struct VulkanDeviceMakeFromStagingBuffer : public VulkanDeviceStagingBuffer {
-	using Super = VulkanDeviceStagingBuffer;
-	using Super::Super;
-
-	VulkanDeviceMakeFromStagingBuffer(
-		VulkanPhysicalDevice const * const physicalDevice,
-		VulkanDevice const * const device,
-		void const * const srcData,
-		size_t bufferSize
-	) : Super(
-		physicalDevice,
-		device,
-		bufferSize
-	) {
 		void * dstData = {};
 		vkMapMemory(
 			(*device)(),
