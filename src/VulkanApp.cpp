@@ -299,6 +299,7 @@ public:
 
 	Wrapper(Handle const handle_) 
 	: handle(handle_) {}
+	
 	Wrapper(Wrapper<Handle, Allocator> && rhs) 
 	: handle(rhs.handle) { 
 		rhs.handle = {}; 
@@ -317,6 +318,10 @@ public:
 	Handle operator()() { return ASSERTHANDLE(handle); }
 	//Handle & operator()() { return ASSERTHANDLE(handle); }
 	//Handle && operator()() { return ASSERTHANDLE(handle); }
+
+	void release() {
+		handle = {};
+	}
 };
 
 }
@@ -1232,6 +1237,23 @@ public:
 		if (handle) vkFreeCommandBuffers((*device)(), commandPool, 1, &handle);
 	}
 
+#if 1
+	VulkanCommandBuffer(Handle handle_) : Super(handle_) {}
+	VulkanCommandBuffer(VulkanCommandBuffer && rhs) 
+	: Super(rhs.handle) { 
+		rhs.handle = {}; 
+	}
+	VulkanCommandBuffer & operator=(VulkanCommandBuffer && rhs) {
+		if (this != &rhs) {
+			handle = rhs.handle;
+			rhs.handle = {};
+		}
+		return *this;
+	}
+	VulkanCommandBuffer(VulkanCommandBuffer const & rhs) = delete;
+	VulkanCommandBuffer & operator=(VulkanCommandBuffer const & rhs) = delete;
+#endif
+
 	VulkanCommandBuffer(
 		VkCommandBuffer const handle_,
 		VulkanDevice const * const device_,
@@ -1240,6 +1262,22 @@ public:
 		device(device_),
 		commandPool(commandPool_)
 	{}
+
+	void reset(
+		VkCommandBufferResetFlags const flags
+	) const {
+		VULKAN_SAFE(vkResetCommandBuffer, (*this)(), flags);
+	}
+
+	void begin(
+		VkCommandBufferBeginInfo const info
+	) const {
+		VULKAN_SAFE(vkBeginCommandBuffer, handle, &info);
+	}
+
+	void end() const {
+		VULKAN_SAFE(vkEndCommandBuffer, handle);
+	}
 
 	void copyBuffer(
 		VkBuffer const srcBuffer,
@@ -1304,6 +1342,157 @@ public:
 			imageMemBarriers.data()
 		);
 	}
+
+	void beginRenderPass(
+		VkRenderPassBeginInfo const info,
+		VkSubpassContents const contents
+	) const {
+		vkCmdBeginRenderPass(
+			handle,
+			&info,
+			contents
+		);
+	}
+
+	void endRenderPass() const {
+		vkCmdEndRenderPass(handle);
+	}
+
+	void bindPipeline(
+		VkPipelineBindPoint const pipelineBindPoint,
+	    VkPipeline const pipeline
+	) const {
+		vkCmdBindPipeline(
+			handle,
+			pipelineBindPoint,
+			pipeline
+		);
+	}
+
+	//the args also has 'first' and 'count'
+	// but ... why not just ptr-add to offset 'first'?
+	// so 'count' is all thats needed ...
+	template<
+		typename ViewportsType = std::array<VkViewport, 0>
+	>
+	void setViewport(
+		ViewportsType const & viewports
+	) const {
+		vkCmdSetViewport(
+			handle,
+			0,
+			(uint32_t)viewports.size(),
+			viewports.data()
+		);
+	}
+
+	template<
+		typename ScissorsType = std::array<VkRect2D, 0>
+	>
+	void setScissor(
+		ScissorsType const & scissors
+	) const {
+		vkCmdSetScissor(
+			handle,
+			0,
+			(uint32_t)scissors.size(),
+			scissors.data()
+		);
+	}
+
+	template<
+		typename BuffersType = std::array<VkBuffer, 0>,
+		typename DeviceSizesType = std::array<VkDeviceSize, 0>
+	>
+	void bindVertexBuffers(
+		BuffersType const & buffers,
+		DeviceSizesType const & offsets
+	) const {
+		vkCmdBindVertexBuffers(
+			handle,
+			0,
+			(uint32_t)buffers.size(),
+			buffers.data(),
+			// size matches vertexBuffers.size()?
+			offsets.data()
+		);
+	}
+
+	void bindIndexBuffer(
+		VkBuffer const buffer,
+		VkDeviceSize const offset,
+		VkIndexType const indexType
+	) const {
+		vkCmdBindIndexBuffer(
+			handle,
+			buffer,
+			offset,
+			indexType
+		);
+	}
+
+	template<
+		typename DescriptorSetsType = std::array<VkDescriptorSet, 0>,
+		typename DynamicOffsetsType = std::array<uint32_t, 0>
+	>
+	void bindDescriptorSets(
+		VkPipelineBindPoint pipelineBindPoint,
+		VkPipelineLayout layout,
+		uint32_t firstSet,
+		DescriptorSetsType const & descriptorSets,
+		DynamicOffsetsType const & dynamicOffsets
+	) const {
+		vkCmdBindDescriptorSets(
+			handle,
+			pipelineBindPoint,
+			layout,
+			firstSet,
+			(uint32_t)descriptorSets.size(),
+			descriptorSets.data(),
+			(uint32_t)dynamicOffsets.size(),
+			dynamicOffsets.data()
+		);
+	}
+
+	void drawIndexed(
+		uint32_t indexCount,
+		uint32_t instanceCount,
+		uint32_t firstIndex,
+		int32_t vertexOffset,
+		uint32_t firstInstance
+	) const {
+		vkCmdDrawIndexed(
+			handle,
+			indexCount,
+			instanceCount,
+			firstIndex,
+			vertexOffset,
+			firstInstance
+		);
+	}
+
+	template<
+		typename RegionsType = std::array<VkImageBlit, 0>
+	>
+	void blitImage(
+	    VkImage srcImage,
+		VkImageLayout srcImageLayout,
+		VkImage dstImage,
+		VkImageLayout dstImageLayout,
+		RegionsType const & regions,
+		VkFilter filter
+	) const {
+		vkCmdBlitImage(
+			handle,
+			srcImage,
+			srcImageLayout,
+			dstImage,
+			dstImageLayout,
+			(uint32_t)regions.size(),
+			regions.data(),
+			filter
+		);
+	}
 };
 
 struct VulkanSingleTimeCommand : public VulkanCommandBuffer {
@@ -1323,16 +1512,15 @@ struct VulkanSingleTimeCommand : public VulkanCommandBuffer {
 		vkAllocateCommandBuffers((*device)(), &allocInfo, &handle);
 		// end part that matches
 		// and this part kinda matches the start of 'recordCommandBuffer'
-		auto beginInfo = VkCommandBufferBeginInfo{
+		begin(VkCommandBufferBeginInfo{
 			.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
 			.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-		};
-		VULKAN_SAFE(vkBeginCommandBuffer, handle, &beginInfo);
+		});
 		//end part that matches
 	}
 	
 	~VulkanSingleTimeCommand() {
-		VULKAN_SAFE(vkEndCommandBuffer, handle);
+		end();
 		auto queue = device->getGraphicsQueue();
 		queue->submit(VkSubmitInfo{
 			.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
@@ -2572,15 +2760,15 @@ protected:
 					},
 				},
 			};
-			vkCmdBlitImage(
-				commandBuffer(),
+			
+			commandBuffer.blitImage(
                 image,
 				VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                 image,
 				VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                1,
-				&blit,
-                VK_FILTER_LINEAR);
+                Common::make_array(blit),
+                VK_FILTER_LINEAR
+			);
 
             barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
             barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -2739,12 +2927,14 @@ protected:
 		// end part that matches
 	}
 
-	void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex) {
+	void recordCommandBuffer(
+		VulkanCommandBuffer const * const commandBuffer,
+		uint32_t imageIndex
+	) {
 		// TODO this part matches VulkanSingleTimeCommand ctor
-		auto beginInfo = VkCommandBufferBeginInfo{
+		commandBuffer->begin(VkCommandBufferBeginInfo{
 			.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-		};
-		VULKAN_SAFE(vkBeginCommandBuffer, commandBuffer, &beginInfo);
+		});
 		// end part that matches
 
 		auto clearValues = Common::make_array(
@@ -2755,74 +2945,67 @@ protected:
 				.depthStencil = {1, 0},
 			}
 		);
-		auto renderPassInfo = VkRenderPassBeginInfo{
-			.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-			.renderPass = (*swapChain->getRenderPass())(),
-			.framebuffer = swapChain->framebuffers[imageIndex],
-			.renderArea = {
-				.offset = {0, 0},
-				.extent = swapChain->extent,
+		commandBuffer->beginRenderPass(
+			VkRenderPassBeginInfo{
+				.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+				.renderPass = (*swapChain->getRenderPass())(),
+				.framebuffer = swapChain->framebuffers[imageIndex],
+				.renderArea = {
+					.offset = {0, 0},
+					.extent = swapChain->extent,
+				},
+				.clearValueCount = (uint32_t)clearValues.size(),
+				.pClearValues = clearValues.data(),
 			},
-			.clearValueCount = (uint32_t)clearValues.size(),
-			.pClearValues = clearValues.data(),
-		};
-		vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+			VK_SUBPASS_CONTENTS_INLINE
+		);
 
 		{
-			vkCmdBindPipeline(
-				commandBuffer,
+			commandBuffer->bindPipeline(
 				VK_PIPELINE_BIND_POINT_GRAPHICS,
 				(*graphicsPipeline)()
 			);
 
-			auto viewport = VkViewport{
-				.x = 0,
-				.y = 0,
-				.width = (float)swapChain->extent.width,
-				.height = (float)swapChain->extent.height,
-				.minDepth = 0,
-				.maxDepth = 1,
-			};
-			vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
+			commandBuffer->setViewport(Common::make_array(
+				VkViewport{
+					.x = 0,
+					.y = 0,
+					.width = (float)swapChain->extent.width,
+					.height = (float)swapChain->extent.height,
+					.minDepth = 0,
+					.maxDepth = 1,
+				}		
+			));
 
-			auto scissor = VkRect2D{
-				.offset = {0, 0},
-				.extent = swapChain->extent,
-			};
-			vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+			commandBuffer->setScissor(Common::make_array(
+				VkRect2D{
+					.offset = {0, 0},
+					.extent = swapChain->extent,
+				}
+			));
 
-			auto vertexBuffers = Common::make_array<VkBuffer>(
-				(*vertexBuffer)()
-			);
-			VkDeviceSize offsets[] = {0};
-			vkCmdBindVertexBuffers(
-				commandBuffer,
-				0,
-				(uint32_t)vertexBuffers.size(),
-				vertexBuffers.data(),
-				offsets
+			commandBuffer->bindVertexBuffers(
+				Common::make_array<VkBuffer>(
+					(*vertexBuffer)()
+				),
+				Common::make_array<VkDeviceSize>(0)
 			);
 
-			vkCmdBindIndexBuffer(
-				commandBuffer,
+			commandBuffer->bindIndexBuffer(
 				(*indexBuffer)(),
 				0,
 				VK_INDEX_TYPE_UINT32
 			);
 
-			vkCmdBindDescriptorSets(
-				commandBuffer,
+			commandBuffer->bindDescriptorSets(
 				VK_PIPELINE_BIND_POINT_GRAPHICS,
 				graphicsPipeline->getPipelineLayout(),
 				0,
-				1,
-				&descriptorSets[currentFrame],
-				0,
-				nullptr
+				Common::make_array(descriptorSets[currentFrame]),
+				{}
 			);
 
-			vkCmdDrawIndexed(
-				commandBuffer,
+			commandBuffer->drawIndexed(
 				(uint32_t)indices.size(),
 				1,
 				0,
@@ -2831,9 +3014,8 @@ protected:
 			);
 		}
 
-		vkCmdEndRenderPass(commandBuffer);
-
-		VULKAN_SAFE(vkEndCommandBuffer, commandBuffer);
+		commandBuffer->endRenderPass();
+		commandBuffer->end();
 	}
 
 	void initSyncObjects() {
@@ -3006,8 +3188,13 @@ public:
 
 		vkResetFences((*device)(), 1, &inFlightFences[currentFrame]);
 
-		vkResetCommandBuffer(commandBuffers[currentFrame], /*VkCommandBufferResetFlagBits*/ 0);
-		recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
+		{
+			auto o = VulkanCommandBuffer(commandBuffers[currentFrame]);
+			o.reset(/*VkCommandBufferResetFlagBits*/ 0);
+			recordCommandBuffer(&o, imageIndex);
+			
+			o.release();	//don't destroy
+		}
 
 		auto waitSemaphores = Common::make_array(
 			(VkSemaphore)imageAvailableSemaphores[currentFrame]
@@ -3067,11 +3254,11 @@ struct Test : public ::SDLApp::SDLApp {
 	using Super = ::SDLApp::SDLApp;
 
 protected:
-	std::unique_ptr<VulkanCommon> vk;
+	std::unique_ptr<VulkanCommon> vkCommon;
 	
 	virtual void initWindow() {
 		Super::initWindow();
-		vk = std::make_unique<VulkanCommon>(this);
+		vkCommon = std::make_unique<VulkanCommon>(this);
 	}
 
 	virtual std::string getTitle() const {
@@ -3089,16 +3276,16 @@ protected:
 		Super::loop();
 		//why here instead of shutdown?
 
-		vk->loopDone();
+		vkCommon->loopDone();
 	}
 	
 	virtual void onUpdate() {
 		Super::onUpdate();
-		vk->drawFrame();
+		vkCommon->drawFrame();
 	}
 
 	virtual void onResize() {
-		vk->setFramebufferResized();
+		vkCommon->setFramebufferResized();
 	}
 };
 
