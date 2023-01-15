@@ -344,7 +344,7 @@ struct VulkanInstance : public VulkanHandle<VkInstance> {
 
 	// TODO this is copied from the parent class
 	//  so I could put it in one place by make the parent CRTP and return this
-#if 1	
+#if 1
 	VulkanInstance(Handle const handle_) 
 	: Super(handle_) {}
 	VulkanInstance(VulkanInstance && rhs) 
@@ -971,6 +971,38 @@ CREATE_CREATER(CommandPool, )
 		VULKAN_SAFE(vkDeviceWaitIdle, (*this)());
 	}
 
+	// TODO make these VulkanFence methods?
+
+	template<
+		typename FencesType = std::array<VkFence, 0>
+	>
+	void resetFences(
+		FencesType const & fences
+	) const {
+		VULKAN_SAFE(vkResetFences,
+			(*this)(),
+			(uint32_t)fences.size(),
+			fences.data()
+		);
+	}
+
+	template<
+		typename FencesType = std::array<VkFence, 0>
+	>
+	void waitForFences(
+		FencesType const & fences,
+		bool waitAll = true,
+		uint64_t timeout = UINT64_MAX
+	) const {
+		VULKAN_SAFE(vkWaitForFences,
+			(*this)(),
+			(uint32_t)fences.size(),
+			fences.data(),
+			waitAll ? VK_TRUE : VK_FALSE,
+			timeout
+		);
+	}
+
 	// ************** from here on down, app-specific **************  
 	
 	VulkanDevice(
@@ -1172,6 +1204,24 @@ public:
 	) : Super(device_->createImage(&createInfo, getAllocator())),
 		device(device_)
 	{}
+
+	// also in VulkanHandle
+#if 1
+	VulkanImage(VulkanImage && rhs) 
+	: Super(rhs.handle) { 
+		rhs.handle = {}; 
+	}
+	VulkanImage & operator=(VulkanImage && rhs) {
+		if (this != &rhs) {
+			handle = rhs.handle;
+			rhs.handle = {};
+		}
+		return *this;
+	}
+	VulkanImage(VulkanImage const & rhs) = delete;
+	VulkanImage & operator=(VulkanImage const & rhs) = delete;
+#endif
+
 };
 
 struct VulkanImageView : public VulkanHandle<VkImageView> {
@@ -1877,27 +1927,6 @@ public:
 		VkImageUsageFlags usage,
 		VkMemoryPropertyFlags properties
 	) {
-#if 1
-		auto image = VkImage{};
-		auto imageInfo = VkImageCreateInfo{
-			.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
-			.imageType = VK_IMAGE_TYPE_2D,
-			.format = format,
-			.extent = {
-				.width = width,
-				.height = height,
-				.depth = 1,
-			},
-			.mipLevels = mipLevels,
-			.arrayLayers = 1,
-			.samples = numSamples,
-			.tiling = tiling,
-			.usage = usage,
-			.sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-			.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-		};
-		VULKAN_SAFE(vkCreateImage, (*device)(), &imageInfo, nullptr/*getAllocator()*/, &image);
-#else		
 		// TODO this as a ctor that just calls Super
 		VulkanImage image(
 			device,
@@ -1919,9 +1948,9 @@ public:
 				.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
 			}
 		);
-#endif
+
 		auto memRequirements = VkMemoryRequirements{};
-		vkGetImageMemoryRequirements((*device)(), image, &memRequirements);
+		vkGetImageMemoryRequirements((*device)(), image(), &memRequirements);
 
 		auto imageMemory = VkDeviceMemory{};
 		auto allocInfo = VkMemoryAllocateInfo{
@@ -1931,9 +1960,11 @@ public:
 		};
 		VULKAN_SAFE(vkAllocateMemory, (*device)(), &allocInfo, nullptr/*getAllocator()*/, &imageMemory);
 
-		vkBindImageMemory((*device)(), image, imageMemory, 0);
+		vkBindImageMemory((*device)(), image(), imageMemory, 0);
 		
-		return std::make_unique<VulkanDeviceMemoryImage>(image, imageMemory, device);
+		auto result = std::make_unique<VulkanDeviceMemoryImage>(image(), imageMemory, device);
+		image.release();
+		return result;
 	}
 };
 
@@ -1983,7 +2014,8 @@ public:
 	}
 	
 	// ************** from here on down, app-specific **************  
-	
+	// but so are all the member variables so ...
+
 	VulkanSwapChain(
 		Tensor::int2 screenSize,
 		ThisVulkanPhysicalDevice const * const physicalDevice,
@@ -2104,6 +2136,7 @@ public:
 			framebuffers[i] = device_->createFramebuffer(&framebufferInfo);
 		}
 	}
+
 public:
 	std::unique_ptr<VulkanImageView> createImageView(
 		VkImage image,
@@ -2427,7 +2460,12 @@ public:
 			.subpass = 0,
 			.basePipelineHandle = VK_NULL_HANDLE,
 		};
-		handle = device_->createGraphicsPipelines((VkPipelineCache)VK_NULL_HANDLE, 1, &pipelineInfo, getAllocator());
+		handle = device_->createGraphicsPipelines(
+			(VkPipelineCache)VK_NULL_HANDLE,
+			1,
+			&pipelineInfo,
+			getAllocator()
+		);
 	}
 };
 
@@ -3166,9 +3204,16 @@ float[3][4][4] buf = {
 	}
 public:
 	void drawFrame() {
-		vkWaitForFences((*device)(), 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
+		device->waitForFences(
+			Common::make_array(
+				inFlightFences[currentFrame]
+			)
+		);
 
-		auto imageIndex = uint32_t{};
+		// should this be a swapChain method?
+		// if so then how to return both imageIndex and result?
+		// if not result then how to provide callback upon recreate-swap-chain?
+		uint32_t imageIndex = {};
 		VkResult result = vkAcquireNextImageKHR(
 			(*device)(),
 			(*swapChain)(),
@@ -3186,7 +3231,11 @@ public:
 		
 		updateUniformBuffer(currentFrame);
 
-		vkResetFences((*device)(), 1, &inFlightFences[currentFrame]);
+		device->resetFences(
+			Common::make_array(
+				inFlightFences[currentFrame]
+			)
+		);
 
 		{
 			auto o = VulkanCommandBuffer(commandBuffers[currentFrame]);
