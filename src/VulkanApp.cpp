@@ -297,26 +297,12 @@ public:
 //vptr?  dtor?  child class?
 //	~Wrapper() { release(); }
 
-	Wrapper(Handle const & handle_) 
-	: handle(handle_) 
-	{}
-	
-	Wrapper(Wrapper<Handle, Allocator> const & rhs) 
-	: handle(rhs.handle) 
-	{}
-	
+	Wrapper(Handle const handle_) 
+	: handle(handle_) {}
 	Wrapper(Wrapper<Handle, Allocator> && rhs) 
 	: handle(rhs.handle) { 
 		rhs.handle = {}; 
 	}
-	
-	Wrapper<Handle, Allocator> & operator=(Wrapper<Handle, Allocator> const & rhs) {
-		if (this != &rhs) {
-			handle = rhs.handle;
-		}
-		return *this;
-	}
-
 	Wrapper<Handle, Allocator> & operator=(Wrapper<Handle, Allocator> && rhs) {
 		if (this != &rhs) {
 			handle = rhs.handle;
@@ -324,11 +310,8 @@ public:
 		}
 		return *this;
 	}
-
-	Wrapper<Handle_, Allocator> & operator=(Handle const & rhs) {
-		handle = rhs;
-		return *this;
-	}
+	Wrapper(Wrapper<Handle, Allocator> const & rhs) = delete;
+	Wrapper<Handle, Allocator> & operator=(Wrapper<Handle, Allocator> const & rhs) = delete;
 
 	Handle const & operator()() const { return ASSERTHANDLE(handle); }
 	Handle operator()() { return ASSERTHANDLE(handle); }
@@ -348,6 +331,28 @@ struct VulkanInstance : public VulkanHandle<VkInstance> {
 	~VulkanInstance() {
 		if (handle) vkDestroyInstance(handle, getAllocator());
 	}
+	
+	VulkanInstance() {}
+
+	// TODO this is copied from the parent class
+	//  so I could put it in one place by make the parent CRTP and return this
+#if 1	
+	VulkanInstance(Handle const handle_) 
+	: Super(handle_) {}
+	VulkanInstance(VulkanInstance && rhs) 
+	: Super(rhs.handle) { 
+		rhs.handle = {}; 
+	}
+	VulkanInstance & operator=(VulkanInstance && rhs) {
+		if (this != &rhs) {
+			handle = rhs.handle;
+			rhs.handle = {};
+		}
+		return *this;
+	}
+	VulkanInstance(VulkanInstance const & rhs) = delete;
+	VulkanInstance & operator=(VulkanInstance const & rhs) = delete;
+#endif
 
 	PFN_vkVoidFunction getProcAddr(char const * const name) const {
 		return vkGetInstanceProcAddr((*this)(), name);
@@ -359,12 +364,37 @@ struct VulkanInstance : public VulkanHandle<VkInstance> {
 			(*this)()
 		);
 	}
-	
+};
+
+// so this doesn't add any fields/methods
+// and in fact it's designed to hand off its handle to a VulkanInstance class
+struct ThisVulkanInstance : public VulkanInstance {
+	using Super = VulkanInstance;
+
+	//copied from parent ...
+#if 1	
+	ThisVulkanInstance(Handle const handle_) 
+	: Super(handle_) {}
+	ThisVulkanInstance(ThisVulkanInstance && rhs) 
+	: Super(rhs.handle) { 
+		rhs.handle = {}; 
+	}
+	ThisVulkanInstance & operator=(ThisVulkanInstance && rhs) {
+		if (this != &rhs) {
+			handle = rhs.handle;
+			rhs.handle = {};
+		}
+		return *this;
+	}
+	ThisVulkanInstance(ThisVulkanInstance const & rhs) = delete;
+	ThisVulkanInstance & operator=(ThisVulkanInstance const & rhs) = delete;
+#endif
+
 	// ************** from here on down, app-specific **************  
 
 	// this does result in vkCreateInstance, 
 	//  but the way it gest there is very application-specific
-	VulkanInstance(
+	ThisVulkanInstance(
 		::SDLApp::SDLApp const * const app,
 		bool const enableValidationLayers
 	) {
@@ -2233,7 +2263,7 @@ public:
 		}
 
 		// hmm, maybe instance should be a shared_ptr and then passed to debug, surface, and physicalDevice ?
-		instance = std::make_unique<VulkanInstance>(app, enableValidationLayers);
+		instance = std::make_unique<VulkanInstance>(ThisVulkanInstance(app, enableValidationLayers));
 		
 		if (enableValidationLayers) {
 			debug = std::make_unique<VulkanDebugMessenger>(instance.get());
