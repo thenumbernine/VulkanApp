@@ -1926,6 +1926,35 @@ public:
 	{}
 };
 
+struct VulkanDeviceStagingBuffer : public VulkanDeviceMemoryParent<VulkanBuffer> {
+	using Super = VulkanDeviceMemoryParent<VulkanBuffer>;
+	using Super::Super;
+
+	VulkanDeviceStagingBuffer(
+		VulkanPhysicalDevice const * const physicalDevice,
+		VulkanDevice const * const device_,
+		VkDeviceSize size
+	) : Super({}, {}, device_) {
+		VkBufferUsageFlags usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+		VkMemoryPropertyFlags properties = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+		auto bufferInfo = VkBufferCreateInfo{
+			.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+			.size = size,
+			.usage = usage,
+			.sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+		};
+		Super::handle = device_->createBuffer(&bufferInfo);
+
+		auto memRequirements = Super::getMemoryRequirements();
+		Super::memory = VulkanDeviceMemory(device, VkMemoryAllocateInfo{
+			.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+			.allocationSize = memRequirements.size,
+			.memoryTypeIndex = physicalDevice->findMemoryType(memRequirements.memoryTypeBits, properties),
+		});
+		bindMemory(Super::memory());
+	}
+};
+
 struct VulkanDeviceMemoryBuffer : public VulkanDeviceMemoryParent<VulkanBuffer> {
 	using Super = VulkanDeviceMemoryParent<VulkanBuffer>;
 	using Super::Super;
@@ -1970,31 +1999,29 @@ struct VulkanDeviceMemoryBuffer : public VulkanDeviceMemoryParent<VulkanBuffer> 
 	}
 
 	// TODO make a StagingBuffer subclass?
-	static std::unique_ptr<VulkanDeviceMemoryBuffer> makeFromStaged(
+	static auto makeFromStaged(
 		VulkanPhysicalDevice const * const physicalDevice,
 		VulkanDevice const * const device,
 		void const * const srcData,
 		size_t bufferSize
 	) {
-		auto stagingBuffer = std::make_unique<VulkanDeviceMemoryBuffer>(
+		auto stagingBuffer = VulkanDeviceStagingBuffer(
 			physicalDevice,
 			device,
-			bufferSize,
-			VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+			bufferSize
 		);
 
 		void * dstData = {};
 		vkMapMemory(
 			(*device)(),
-			stagingBuffer->getMemory()(),
+			stagingBuffer.getMemory()(),
 			0,
 			bufferSize,
 			0,
 			&dstData
 		);
 		memcpy(dstData, srcData, (size_t)bufferSize);
-		vkUnmapMemory((*device)(), stagingBuffer->getMemory()());
+		vkUnmapMemory((*device)(), stagingBuffer.getMemory()());
 
 		return stagingBuffer;
 	}
@@ -2007,7 +2034,7 @@ public:
 		void const * const srcData,
 		size_t bufferSize
 	) {
-		std::unique_ptr<VulkanDeviceMemoryBuffer> stagingBuffer = makeFromStaged(
+		auto stagingBuffer = makeFromStaged(
 			physicalDevice,
 			device,
 			srcData,
@@ -2023,7 +2050,7 @@ public:
 		);
 		
 		commandPool->copyBuffer(
-			(*stagingBuffer)(),
+			stagingBuffer(),
 			(*buffer)(),
 			bufferSize
 		);
@@ -2047,7 +2074,7 @@ public:
 		int texHeight,
 		uint32_t mipLevels
 	) {
-		std::unique_ptr<VulkanDeviceMemoryBuffer> stagingBuffer = VulkanDeviceMemoryBuffer::makeFromStaged(
+		auto stagingBuffer = VulkanDeviceMemoryBuffer::makeFromStaged(
 			physicalDevice,
 			device,
 			srcData,
@@ -2077,7 +2104,7 @@ public:
 			mipLevels
 		);
 		commandPool->copyBufferToImage(
-			(*stagingBuffer)(),
+			stagingBuffer(),
 			(*image)(),
 			(uint32_t)texWidth,
 			(uint32_t)texHeight
