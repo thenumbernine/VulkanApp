@@ -923,7 +923,14 @@ CREATE_CREATER(CommandPool, )
 		VkAllocationCallbacks const * const allocator = nullptr//getAllocator()
 	) const {
 		auto result = VkPipeline{};
-		VULKAN_SAFE(vkCreateGraphicsPipelines, (*this)(), pipelineCache, numCreateInfo, createInfo, allocator, &result);
+		VULKAN_SAFE(vkCreateGraphicsPipelines,
+			(*this)(),
+			pipelineCache,
+			numCreateInfo,
+			createInfo,
+			allocator,
+			&result
+		);
 		return result;
 	}
 	
@@ -1220,18 +1227,19 @@ public:
 	}
 
 	void copyBufferToImage(
-		VkBuffer const buffer,
-		VkImage const image,
+		VkBuffer const srcBuffer,
+		VkImage const dstImage,
+		VkImageLayout const dstImageLayout,
 		uint32_t width,
 		uint32_t height,
 		VkBufferImageCopy const region
 	) const {
 		vkCmdCopyBufferToImage(
 			(*this)(),
-			buffer,
-			image,
-			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-			1,
+			srcBuffer,
+			dstImage,
+			dstImageLayout,
+			1,	//count ... TODO make an array-based one?
 			&region
 		);
 	}
@@ -1357,6 +1365,7 @@ public:
 		.copyBufferToImage(
 			buffer,
 			image,
+			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 			width,
 			height,
 			VkBufferImageCopy{
