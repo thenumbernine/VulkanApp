@@ -341,11 +341,8 @@ public:
 template<typename... Args>
 using VulkanHandle = vk::Wrapper<Args...>;
 
-struct VulkanDebugMessenger {
-protected:
-	vk::DebugUtilsMessengerEXT obj;
-public:
-	VulkanDebugMessenger(
+struct ThisVulkanDebugMessenger {
+	static auto create(
 		vk::Instance const * const instance
 	) {
 #if 0 // how do I compile this?		
@@ -362,7 +359,8 @@ public:
 				debugCallback
 			)	
 		);
-#endif	
+#endif
+		return vk::DebugUtilsMessengerEXT();
 	}
 
 // app-specific callback
@@ -370,23 +368,6 @@ protected:
 	static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity, VkDebugUtilsMessageTypeFlagsEXT messageType, const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData) {
 		std::cerr << "validation layer: " << pCallbackData->pMessage << std::endl;
 		return VK_FALSE;
-	}
-};
-
-struct VulkanSurface : public VulkanHandle<VkSurfaceKHR> {
-protected:
-	vk::Instance const * const instance = {};	//from VulkanCommon, needs to be held for dtor to work
-public:
-	~VulkanSurface() {
-		if (handle) vkDestroySurfaceKHR(*instance, handle, getAllocator());
-	}
-
-	VulkanSurface(
-		SDL_Window * const window,
-		vk::Instance const * const instance_
-	) : instance(instance_) {
-		// https://vulkan-tutorial.com/Drawing_a_triangle/Presentation/Window_surface
-		SDL_VULKAN_SAFE(SDL_Vulkan_CreateSurface, window, *instance, &handle);
 	}
 };
 
@@ -762,11 +743,11 @@ std::vector<char const *> validationLayers = {
 struct VulkanDevice : public VulkanHandle<VkDevice> {
 	using Super = VulkanHandle<VkDevice>;
 protected:
-	VulkanQueue graphicsQueue;
-	VulkanQueue presentQueue;
+	vk::Queue graphicsQueue;
+	vk::Queue presentQueue;
 public:
-	VulkanQueue const & getGraphicsQueue() const { return graphicsQueue; }
-	VulkanQueue const & getPresentQueue() const { return presentQueue; }
+	auto const & getGraphicsQueue() const { return graphicsQueue; }
+	auto const & getPresentQueue() const { return presentQueue; }
 	
 	~VulkanDevice() {
 		if (handle) vkDestroyDevice(handle, getAllocator());
@@ -774,14 +755,13 @@ public:
 	
 	// should this return a handle or an object?
 	// I'll return a handle like the create*** functions
-	VulkanQueue getQueue(
+	auto getQueue(
 		uint32_t queueFamilyIndex,
 		uint32_t queueIndex = 0
 	) const {
 		auto result = VkQueue{};
-		// should this call the getter or should VulkanQueue's ctor?
 		vkGetDeviceQueue((*this)(), queueFamilyIndex, queueIndex, &result);
-		return result;
+		return vk::Queue(result);
 	}
 	
 	// maybe there's no need for these 'create' functions
@@ -876,11 +856,11 @@ CREATE_CREATER(CommandPool, )
 	
 	VulkanDevice(
 		vk::PhysicalDevice const * const physicalDevice,
-		VulkanSurface const * const surface,
+		vk::SurfaceKHR const * const surface,
 		std::vector<char const *> const & deviceExtensions,
 		bool enableValidationLayers
 	) {
-		auto indices = ThisVulkanPhysicalDevice::findQueueFamilies(*physicalDevice, (*surface)());
+		auto indices = ThisVulkanPhysicalDevice::findQueueFamilies(*physicalDevice, *surface);
 
 		auto queuePriorities = Common::make_array<float>(1);
 		std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
@@ -910,8 +890,8 @@ CREATE_CREATER(CommandPool, )
 			.pEnabledFeatures = &deviceFeatures,
 		});
 	
-		graphicsQueue = VulkanQueue(getQueue(indices.graphicsFamily.value()));
-		presentQueue = VulkanQueue(getQueue(indices.presentFamily.value()));
+		graphicsQueue = getQueue(indices.graphicsFamily.value());
+		presentQueue = getQueue(indices.presentFamily.value());
 	}
 };
 
@@ -1557,11 +1537,11 @@ struct VulkanSingleTimeCommand : public VulkanCommandBuffer {
 	~VulkanSingleTimeCommand() {
 		end();
 		auto const & queue = device->getGraphicsQueue();
-		queue.submit(VkSubmitInfo{
+		queue.submit(vk::SubmitInfo(VkSubmitInfo{
 			.sType = (VkStructureType)vk::StructureType::eSubmitInfo,
 			.commandBufferCount = 1,
 			.pCommandBuffers = &handle,
-		});
+		}));
 		queue.waitIdle();
 	}
 };
@@ -1734,12 +1714,11 @@ struct VulkanDeviceMakeFromStagingBuffer : public VulkanDeviceMemoryParent<Vulka
 		size_t bufferSize
 	) : Super(
 		device_,
-		vk::BufferCreateInfo(
-			{},
-			bufferSize,
-			vk::BufferUsageFlagBits::eTransferSrc,
-			vk::SharingMode::eExclusive
-		),
+		vk::BufferCreateInfo(VkBufferCreateInfo{
+			.size = bufferSize,
+			.usage = (VkBufferUsageFlags)vk::BufferUsageFlagBits::eTransferSrc,
+			.sharingMode = (VkSharingMode)vk::SharingMode::eExclusive,
+		}),
 		{}
 	) {
 		auto memRequirements = Super::getMemoryRequirements();
@@ -1794,12 +1773,12 @@ struct VulkanDeviceMemoryBuffer : public VulkanDeviceMemoryParent<VulkanBuffer> 
 	) {
 #else 	//old
 	: Super({}, {}, device_) {
-		auto bufferInfo = vk::BufferCreateInfo(
-			vk::BufferCreateFlags(),
-			size,
-			usage,
-			vk::SharingMode::eExclusive
-		);
+		auto bufferInfo = vk::BufferCreateInfo(VkBufferCreateInfo{
+			.flags = (VkBufferCreateFlags)vk::BufferCreateFlags(),
+			.size = size,
+			.usage = (VkBufferUsageFlags)usage,
+			.sharingMode = (VkSharingMode)vk::SharingMode::eExclusive,
+		});
 		auto bufferInfoR = (VkBufferCreateInfo)bufferInfo;
 		Super::handle = device_->createBuffer(&bufferInfoR);
 #endif
@@ -2020,10 +1999,10 @@ public:
 		Tensor::int2 screenSize,
 		vk::PhysicalDevice const * const physicalDevice,
 		VulkanDevice const * const device_,
-		VulkanSurface const * const surface,
+		vk::SurfaceKHR const * const surface,
 		vk::SampleCountFlagBits msaaSamples
 	) : device(device_) {
-		auto swapChainSupport = ThisVulkanPhysicalDevice::querySwapChainSupport(*physicalDevice, (*surface)());
+		auto swapChainSupport = ThisVulkanPhysicalDevice::querySwapChainSupport(*physicalDevice, *surface);
 		auto surfaceFormat = chooseSwapSurfaceFormat(swapChainSupport.formats);
 		auto presentMode = chooseSwapPresentMode(swapChainSupport.presentModes);
 		extent = chooseSwapExtent(screenSize, swapChainSupport.capabilities);
@@ -2037,7 +2016,7 @@ public:
 
 		auto createInfo = VkSwapchainCreateInfoKHR{
 			.sType = (VkStructureType)vk::StructureType::eSwapchainCreateInfoKHR,
-			.surface = (*surface)(),
+			.surface = *surface,
 			.minImageCount = imageCount,
 			.imageFormat = (VkFormat)surfaceFormat.format,
 			.imageColorSpace = (VkColorSpaceKHR)surfaceFormat.colorSpace,
@@ -2049,7 +2028,7 @@ public:
 			.presentMode = (VkPresentModeKHR)presentMode,
 			.clipped = VK_TRUE,
 		};
-		auto indices = ThisVulkanPhysicalDevice::findQueueFamilies(*physicalDevice, (*surface)());
+		auto indices = ThisVulkanPhysicalDevice::findQueueFamilies(*physicalDevice, *surface);
 		auto queueFamilyIndices = Common::make_array<uint32_t>(
 			(uint32_t)indices.graphicsFamily.value(),
 			(uint32_t)indices.presentFamily.value()
@@ -2497,8 +2476,8 @@ protected:
 #endif
 
 	vk::Instance instance;
-	std::unique_ptr<VulkanDebugMessenger> debug;	// optional
-	std::unique_ptr<VulkanSurface> surface;
+	vk::DebugUtilsMessengerEXT debug;	// optional
+	vk::SurfaceKHR surface;
 	std::unique_ptr<VulkanDevice> device;
 	std::unique_ptr<VulkanSwapChain> swapChain;
 	std::unique_ptr<VulkanGraphicsPipeline> graphicsPipeline;
@@ -2554,22 +2533,29 @@ public:
 		instance = VulkanInstance::create(app, enableValidationLayers);
 		
 		if (enableValidationLayers) {
-			debug = std::make_unique<VulkanDebugMessenger>(&instance);
+			debug = ThisVulkanDebugMessenger::create(&instance);
 		}
 		
-		surface = std::make_unique<VulkanSurface>(
-			app->getWindow(),
-			&instance
-		);
+		{
+			VkSurfaceKHR h = {};
+			SDL_VULKAN_SAFE(
+				SDL_Vulkan_CreateSurface,
+				app->getWindow(),
+				instance,
+				&h
+			);
+			surface = vk::SurfaceKHR(h);	
+		}
+
 		physicalDevice = ThisVulkanPhysicalDevice::create(
 			&instance,
-			(*surface)(),
+			surface,
 			deviceExtensions
 		);
 		msaaSamples = ThisVulkanPhysicalDevice::getMaxUsableSampleCount(physicalDevice);
 		device = std::make_unique<VulkanDevice>(
 			&physicalDevice,
-			surface.get(),
+			&surface,
 			deviceExtensions,
 			enableValidationLayers
 		);
@@ -2577,7 +2563,7 @@ public:
 			app->getScreenSize(),
 			&physicalDevice,
 			device.get(),
-			surface.get(),
+			&surface,
 			msaaSamples
 		);
 		graphicsPipeline = std::make_unique<VulkanGraphicsPipeline>(
@@ -2588,7 +2574,7 @@ public:
 		);
 		
 		{
-			auto queueFamilyIndices = ThisVulkanPhysicalDevice::findQueueFamilies(physicalDevice, (*surface)());
+			auto queueFamilyIndices = ThisVulkanPhysicalDevice::findQueueFamilies(physicalDevice, surface);
 			commandPool = std::make_unique<VulkanCommandPool>(
 				device.get(),
 				VkCommandPoolCreateInfo{
@@ -2703,27 +2689,11 @@ protected:
 
 public:
 	~VulkanCommon() {
-		swapChain = nullptr;
-		graphicsPipeline = nullptr;
-		uniformBuffers.clear();
-		indexBuffer = nullptr;
-		vertexBuffer = nullptr;
-		descriptorPool = nullptr;
-		textureSampler = nullptr;
-		textureImageView = nullptr;
-		textureImage = nullptr;
-
 		for (size_t i = 0; i < maxFramesInFlight; i++) {
 			vkDestroySemaphore((*device)(), renderFinishedSemaphores[i], nullptr);
 			vkDestroySemaphore((*device)(), imageAvailableSemaphores[i], nullptr);
 			vkDestroyFence((*device)(), inFlightFences[i], nullptr);
 		}
-
-		commandPool = nullptr;
-		device = nullptr;
-		surface = nullptr;
-		debug = nullptr;
-		instance = nullptr;
 	}
 
 protected:
@@ -2952,7 +2922,7 @@ protected:
 			app->getScreenSize(),
 			&physicalDevice,
 			device.get(),
-			surface.get(),
+			&surface,
 			msaaSamples
 		);
 	}
@@ -3266,32 +3236,35 @@ public:
 		);
 
 		// static assert sizes match?
-		auto submitInfo = VkSubmitInfo{
-			.sType = (VkStructureType)vk::StructureType::eSubmitInfo,
-			.waitSemaphoreCount = (uint32_t)waitSemaphores.size(),
-			.pWaitSemaphores = waitSemaphores.data(),
-			.pWaitDstStageMask = waitStages.data(),
-			.commandBufferCount = 1,
-			.pCommandBuffers = &commandBuffers[currentFrame],
-			.signalSemaphoreCount = (uint32_t)signalSemaphores.size(),
-			.pSignalSemaphores = signalSemaphores.data(),
-		};
-		device->getGraphicsQueue().submit(1, &submitInfo, inFlightFences[currentFrame]);
+		device->getGraphicsQueue().submit(
+			vk::SubmitInfo(VkSubmitInfo{
+				.sType = (VkStructureType)vk::StructureType::eSubmitInfo,
+				.waitSemaphoreCount = (uint32_t)waitSemaphores.size(),
+				.pWaitSemaphores = waitSemaphores.data(),
+				.pWaitDstStageMask = waitStages.data(),
+				.commandBufferCount = 1,
+				.pCommandBuffers = &commandBuffers[currentFrame],
+				.signalSemaphoreCount = (uint32_t)signalSemaphores.size(),
+				.pSignalSemaphores = signalSemaphores.data(),
+			}),
+			inFlightFences[currentFrame]
+		);
 		
 		auto swapChains = Common::make_array<VkSwapchainKHR>(
 			(*swapChain)()
 		);
-		auto presentInfo = VkPresentInfoKHR{
-			.sType = (VkStructureType)vk::StructureType::ePresentInfoKHR,
-			.waitSemaphoreCount = (uint32_t)signalSemaphores.size(),
-			// these two sizes need t match (right?)
-			.pWaitSemaphores = signalSemaphores.data(),
-			.swapchainCount = (uint32_t)swapChains.size(),
-			// wait do these two sizes need to match?
-			.pSwapchains = swapChains.data(),
-			.pImageIndices = &imageIndex,
-		};
-		result = vk::Result(device->getPresentQueue().present(&presentInfo));
+		result = device->getPresentQueue().presentKHR(
+			vk::PresentInfoKHR(VkPresentInfoKHR{
+				.sType = (VkStructureType)vk::StructureType::ePresentInfoKHR,
+				.waitSemaphoreCount = (uint32_t)signalSemaphores.size(),
+				// these two sizes need t match (right?)
+				.pWaitSemaphores = signalSemaphores.data(),
+				.swapchainCount = (uint32_t)swapChains.size(),
+				// wait do these two sizes need to match?
+				.pSwapchains = swapChains.data(),
+				.pImageIndices = &imageIndex,
+			})
+		);
 		if (result == vk::Result::eErrorOutOfDateKHR || 
 			result == vk::Result::eSuboptimalKHR || 
 			framebufferResized
