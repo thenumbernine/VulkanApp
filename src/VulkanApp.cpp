@@ -343,11 +343,11 @@ using VulkanHandle = vk::Wrapper<Args...>;
 
 struct ThisVulkanDebugMessenger {
 	static auto create(
-		vk::Instance const * const instance
+		vk::Instance const & instance
 	) {
 #if 0 // how do I compile this?		
 		obj = vk::DebugUtilsMessengerEXT(
-			*instance,
+			instance,
 			vk::DebugUtilsMessengerCreateInfoEXT(
 				{},
 				vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose 
@@ -371,93 +371,11 @@ protected:
 	}
 };
 
-struct VulkanQueue : public VulkanHandle<VkQueue> {
-	using Super = VulkanHandle<VkQueue>;
-	using Super::Super;
-
-#if 1
-	VulkanQueue(Handle const handle_)
-	: Super(handle_) {}
-	VulkanQueue(VulkanQueue && o)
-	: Super(o.handle) {
-		o.handle = {};
-	}
-	VulkanQueue & operator=(VulkanQueue && o) {
-		if (this != &o) {
-			handle = o.handle;
-			o.handle = {};
-		}
-		return *this;
-	}
-	VulkanQueue(VulkanQueue & o)
-	: Super(o.handle) {
-		o.handle = {};
-	}
-	VulkanQueue & operator=(VulkanQueue & o) {
-		if (this != &o) {
-			handle = o.handle;
-			o.handle = {};
-		}
-		return *this;
-	}
-	VulkanQueue(VulkanQueue const & o) = delete;
-	VulkanQueue & operator=(VulkanQueue const & o) = delete;
-#endif
-
-	void waitIdle() const {
-		VULKAN_SAFE(vkQueueWaitIdle, (*this)());
-	}
-
-	// see, no pass-by-copy.
-	// this class is a harmless wrapper so far.
-	// in fact (hmm) should I even throw results or should I return them?  100% wrapper.
-	void submit(
-		uint32_t submitCount,
-		VkSubmitInfo const * const pSubmits,
-		VkFence fence = VK_NULL_HANDLE
-	) const {
-		VULKAN_SAFE(vkQueueSubmit, handle, submitCount, pSubmits, fence);
-	}
-
-	template<
-		typename SubmitInfoType = std::array<VkSubmitInfo, 0>
-	>
-	void submit(
-		SubmitInfoType const & submits,
-		VkFence fence = VK_NULL_HANDLE
-	) const {
-		VULKAN_SAFE(vkQueueSubmit,
-			handle,
-			(uint32_t)submits.size(),
-			submits.data(),
-			fence
-		);
-	}
-
-	void submit(
-		VkSubmitInfo const submit,
-		VkFence fence = VK_NULL_HANDLE
-	) const {
-		VULKAN_SAFE(vkQueueSubmit,
-			handle,
-			1,
-			&submit,
-			fence
-		);
-	}
-
-	VkResult present(
-		VkPresentInfoKHR const * const pPresentInfo
-	) const {
-		return vkQueuePresentKHR(handle, pPresentInfo);
-	}
-};
-
 
 // ************** from here on down, app-specific **************
 
 
-struct VulkanInstance {
+struct ThisVulkanInstance {
 
 	// this does result in vkCreateInstance,
 	//  but the way it gest there is very application-specific
@@ -551,13 +469,13 @@ protected:
 
 struct ThisVulkanPhysicalDevice {
 	// used by the application for specific physical device querying (should be a subclass of the general vk::PhysicalDevice)
-	static vk::PhysicalDevice create(
-		vk::Instance const * const instance,
+	static auto create(
+		vk::Instance const & instance,
 		VkSurfaceKHR surface,
 		std::vector<char const *> const & deviceExtensions
 	) {
 		vk::PhysicalDevice desiredPhysDev = {};
-		auto physDevs = instance->enumeratePhysicalDevices();
+		auto physDevs = instance.enumeratePhysicalDevices();
 		//debug:
 		std::cout << "devices:" << std::endl;
 		for (auto const & physDev : physDevs) {
@@ -740,18 +658,16 @@ std::vector<char const *> validationLayers = {
 	"VK_LAYER_KHRONOS_validation"
 };
 
-struct VulkanDevice : public VulkanHandle<VkDevice> {
-	using Super = VulkanHandle<VkDevice>;
+struct VulkanDevice {
 protected:
+	vk::Device device;
 	vk::Queue graphicsQueue;
 	vk::Queue presentQueue;
 public:
+	auto operator()() const { return (VkDevice)device; }
+	auto const & getDevice() const { return device; }
 	auto const & getGraphicsQueue() const { return graphicsQueue; }
 	auto const & getPresentQueue() const { return presentQueue; }
-	
-	~VulkanDevice() {
-		if (handle) vkDestroyDevice(handle, getAllocator());
-	}
 	
 	// should this return a handle or an object?
 	// I'll return a handle like the create*** functions
@@ -760,7 +676,7 @@ public:
 		uint32_t queueIndex = 0
 	) const {
 		auto result = VkQueue{};
-		vkGetDeviceQueue((*this)(), queueFamilyIndex, queueIndex, &result);
+		vkGetDeviceQueue(device, queueFamilyIndex, queueIndex, &result);
 		return vk::Queue(result);
 	}
 	
@@ -772,7 +688,7 @@ public:
 		VkAllocationCallbacks const * const allocator = nullptr/*getAllocator()*/\
 	) const {\
 		auto result = Vk##name##suffix{};\
-		VULKAN_SAFE(vkCreate##name##suffix, (*this)(), createInfo, allocator, &result);\
+		VULKAN_SAFE(vkCreate##name##suffix, device, createInfo, allocator, &result);\
 		return result;\
 	}
 
@@ -794,7 +710,7 @@ CREATE_CREATER(CommandPool, )
 		VkAllocationCallbacks const * const allocator = nullptr/*getAllocator()*/
 	) const {
 		auto result = VkDeviceMemory{};
-		VULKAN_SAFE(vkAllocateMemory, (*this)(), info, allocator, &result);
+		VULKAN_SAFE(vkAllocateMemory, device, info, allocator, &result);
 		return result;
 	}
 
@@ -806,7 +722,7 @@ CREATE_CREATER(CommandPool, )
 	) const {
 		auto result = VkPipeline{};
 		VULKAN_SAFE(vkCreateGraphicsPipelines,
-			(*this)(),
+			device,
 			pipelineCache,
 			numCreateInfo,
 			createInfo,
@@ -817,7 +733,7 @@ CREATE_CREATER(CommandPool, )
 	}
 	
 	void waitIdle() const {
-		VULKAN_SAFE(vkDeviceWaitIdle, (*this)());
+		VULKAN_SAFE(vkDeviceWaitIdle, device);
 	}
 
 	// TODO make these VulkanFence methods?
@@ -829,7 +745,7 @@ CREATE_CREATER(CommandPool, )
 		FencesType const & fences
 	) const {
 		VULKAN_SAFE(vkResetFences,
-			(*this)(),
+			device,
 			(uint32_t)fences.size(),
 			fences.data()
 		);
@@ -844,7 +760,7 @@ CREATE_CREATER(CommandPool, )
 		uint64_t timeout = UINT64_MAX
 	) const {
 		VULKAN_SAFE(vkWaitForFences,
-			(*this)(),
+			device,
 			(uint32_t)fences.size(),
 			fences.data(),
 			waitAll ? VK_TRUE : VK_FALSE,
@@ -879,7 +795,7 @@ CREATE_CREATER(CommandPool, )
 		auto deviceFeatures = VkPhysicalDeviceFeatures{
 			.samplerAnisotropy = VK_TRUE,
 		};
-		handle = physicalDevice->createDevice(VkDeviceCreateInfo{
+		device = vk::Device(physicalDevice->createDevice(VkDeviceCreateInfo{
 			.sType = (VkStructureType)vk::StructureType::eDeviceCreateInfo,
 			.queueCreateInfoCount = (uint32_t)queueCreateInfos.size(),
 			.pQueueCreateInfos = queueCreateInfos.data(),
@@ -888,30 +804,20 @@ CREATE_CREATER(CommandPool, )
 			.enabledExtensionCount = (uint32_t)deviceExtensions.size(),
 			.ppEnabledExtensionNames = deviceExtensions.data(),
 			.pEnabledFeatures = &deviceFeatures,
-		});
+		}));
 	
 		graphicsQueue = getQueue(indices.graphicsFamily.value());
 		presentQueue = getQueue(indices.presentFamily.value());
 	}
 };
 
-struct VulkanRenderPass : public VulkanHandle<VkRenderPass> {
-protected:
-	//held
-	VulkanDevice const * const device = {};
-public:
-	~VulkanRenderPass() {
-		if (handle) vkDestroyRenderPass((*device)(), handle, getAllocator());
-	}
-	
-	// ************** from here on down, app-specific **************
-
-	VulkanRenderPass(
+struct ThisVulkanRenderPass  {
+	static auto create(
 		vk::PhysicalDevice const * const physicalDevice,
 		VulkanDevice const * const device_,
 		vk::Format swapChainImageFormat,
 		vk::SampleCountFlagBits msaaSamples
-	) : device(device_) {
+	) {
 		auto attachments = Common::make_array(
 			VkAttachmentDescription{	//colorAttachment
 				.format = (VkFormat)swapChainImageFormat,
@@ -993,7 +899,7 @@ public:
 			.dependencyCount = (uint32_t)dependencies.size(),
 			.pDependencies = dependencies.data(),
 		};
-		handle = device_->createRenderPass(&renderPassInfo);
+		return vk::RenderPass(device_->createRenderPass(&renderPassInfo));
 	}
 };
 
@@ -1950,7 +1856,7 @@ public:
 struct VulkanSwapChain : public VulkanHandle<VkSwapchainKHR> {
 protected:
 	//owned
-	std::unique_ptr<VulkanRenderPass> renderPass;
+	vk::RenderPass renderPass;
 	// hold for this class lifespan
 	VulkanDevice const * const device = {};
 
@@ -1969,20 +1875,17 @@ public:
 	std::vector<VkFramebuffer> framebuffers;
 	
 public:
-	VulkanRenderPass const * const getRenderPass() const {
-		return renderPass.get();
-	}
+	auto const & getRenderPass() const { return renderPass; }
 
 	~VulkanSwapChain() {
-		depthImageView = nullptr;
-		depthImage = nullptr;
-		colorImageView = nullptr;
-		colorImage = nullptr;
+		depthImageView = {};
+		depthImage = {};
+		colorImageView = {};
+		colorImage = {};
 		
 		for (auto framebuffer : framebuffers) {
 			vkDestroyFramebuffer((*device)(), framebuffer, getAllocator());
 		}
-		renderPass = nullptr;
 		imageViews.clear();
 		if (handle) vkDestroySwapchainKHR((*device)(), handle, getAllocator());
 	}
@@ -2052,7 +1955,7 @@ public:
 			));
 		}
 	
-		renderPass = std::make_unique<VulkanRenderPass>(
+		renderPass = ThisVulkanRenderPass::create(
 			physicalDevice,
 			device_,
 			surfaceFormat.format,
@@ -2111,7 +2014,7 @@ public:
 			);
 			auto framebufferInfo = VkFramebufferCreateInfo{
 				.sType = (VkStructureType)vk::StructureType::eFramebufferCreateInfo,
-				.renderPass = (*renderPass)(),
+				.renderPass = renderPass,
 				.attachmentCount = (uint32_t)attachments.size(),
 				.pAttachments = attachments.data(),
 				.width = extent.width,
@@ -2309,7 +2212,7 @@ public:
 	VulkanGraphicsPipeline(
 		vk::PhysicalDevice const * const physicalDevice,
 		VulkanDevice const * const device_,
-		VulkanRenderPass const * const renderPass,
+		vk::RenderPass const & renderPass,
 		vk::SampleCountFlagBits msaaSamples
 	) : device(device_) {
 		
@@ -2447,7 +2350,7 @@ public:
 			.pColorBlendState = &colorBlending,
 			.pDynamicState = &dynamicState,
 			.layout = pipelineLayout,
-			.renderPass = (*renderPass)(),
+			.renderPass = renderPass,
 			.subpass = 0,
 			.basePipelineHandle = VK_NULL_HANDLE,
 		};
@@ -2530,10 +2433,10 @@ public:
 		}
 
 		// hmm, maybe instance should be a shared_ptr and then passed to debug, surface, and physicalDevice ?
-		instance = VulkanInstance::create(app, enableValidationLayers);
+		instance = ThisVulkanInstance::create(app, enableValidationLayers);
 		
 		if (enableValidationLayers) {
-			debug = ThisVulkanDebugMessenger::create(&instance);
+			debug = ThisVulkanDebugMessenger::create(instance);
 		}
 		
 		{
@@ -2548,7 +2451,7 @@ public:
 		}
 
 		physicalDevice = ThisVulkanPhysicalDevice::create(
-			&instance,
+			instance,
 			surface,
 			deviceExtensions
 		);
@@ -2961,7 +2864,7 @@ protected:
 		commandBuffer->beginRenderPass(
 			VkRenderPassBeginInfo{
 				.sType = (VkStructureType)vk::StructureType::eRenderPassBeginInfo,
-				.renderPass = (*swapChain->getRenderPass())(),
+				.renderPass = swapChain->getRenderPass(),
 				.framebuffer = swapChain->framebuffers[imageIndex],
 				.renderArea = {
 					.offset = {0, 0},
