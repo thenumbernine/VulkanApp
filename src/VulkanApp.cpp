@@ -336,126 +336,33 @@ public:
 	}
 };
 
-#if 0
-struct Instance : public Wrapper<VkInstance> {
-	using Super = VulkanHandle<VkInstance>;
-	using CreateInfo = VkInstanceCreateInfo;
-
-	~Instance() {
-		if (handle) vkDestroyInstance(handle, getAllocator());
-	}
-	Instance() {}
-	Instance(
-		CreateInfo const info
-	) {
-		VULKAN_SAFE(vkCreateInstance, &info, getAllocator(), &handle);
-	}
-	
-	Instance(Handle const handle_)
-	: Super(handle_) {}
-
-	// TODO this is copied from the parent class
-	//  so I could put it in one place by make the parent CRTP and return this
-#if 1
-	Instance(Instance && o)
-	: Super(o.handle) {
-		o.handle = {};
-	}
-	Instance & operator=(Instance && o) {
-		if (this != &o) {
-			handle = o.handle;
-			o.handle = {};
-		}
-		return *this;
-	}
-	Instance(Instance & o)
-	: Super(o.handle) {
-		o.handle = {};
-	}
-	Instance & operator=(Instance & o) {
-		if (this != &o) {
-			handle = o.handle;
-			o.handle = {};
-		}
-		return *this;
-	}
-	Instance(Instance const & o) = delete;
-	Instance & operator=(Instance const & o) = delete;
-#endif
-
-	PFN_vkVoidFunction getProcAddr(char const * const name) const {
-		return vkGetInstanceProcAddr((*this)(), name);
-	}
-
-	std::vector<VkPhysicalDevice> getPhysicalDevices() const {
-		return vulkanEnum<VkPhysicalDevice>(
-			NAME_PAIR(vkEnumeratePhysicalDevices),
-			(*this)()
-		);
-	}
-};
-#endif
-
 }
 
 template<typename... Args>
 using VulkanHandle = vk::Wrapper<Args...>;
 
-struct VulkanDebugMessenger : public VulkanHandle<VkDebugUtilsMessengerEXT> {
+struct VulkanDebugMessenger {
 protected:
-	vk::Instance const * const instance = {};	//needed for getProcAddr and for handle in dtor
-	
-	PFN_vkCreateDebugUtilsMessengerEXT vkCreateDebugUtilsMessengerEXT = {};
-	PFN_vkDestroyDebugUtilsMessengerEXT vkDestroyDebugUtilsMessengerEXT = {};
-
-	static constexpr auto exts = std::make_tuple(
-		std::make_pair("vkCreateDebugUtilsMessengerEXT", &VulkanDebugMessenger::vkCreateDebugUtilsMessengerEXT),
-		std::make_pair("vkDestroyDebugUtilsMessengerEXT", &VulkanDebugMessenger::vkDestroyDebugUtilsMessengerEXT)
-	);
-
+	vk::DebugUtilsMessengerEXT obj;
 public:
-	~VulkanDebugMessenger() {
-		// call destroy function
-		if (vkDestroyDebugUtilsMessengerEXT && handle) {
-			vkDestroyDebugUtilsMessengerEXT(*instance, handle, getAllocator());
-		}
-	}
-
 	VulkanDebugMessenger(
-		vk::Instance const * const instance_
-	) : instance(instance_) {
-		Common::TupleForEach(exts, [this](auto x, size_t i) constexpr -> bool {
-			auto name = std::get<0>(x);
-			auto field = std::get<1>(x);
-			this->*field = (std::decay_t<decltype(this->*field)>)instance->getProcAddr(name);
-			if (!(this->*field)) {
-				throw Common::Exception() << "vkGetInstanceProcAddr " << name << " failed";
-			}
-		});
-
-		// call create function
-		
-		auto createInfo = VkDebugUtilsMessengerCreateInfoEXT{
-			.sType = (VkStructureType)vk::StructureType::eDebugUtilsMessengerCreateInfoEXT,
-			.messageSeverity = (VkDebugUtilsMessageSeverityFlagsEXT)(
-				vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose 
-				| vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning
-				| vk::DebugUtilsMessageSeverityFlagBitsEXT::eError
-			),
-			.messageType = (VkDebugUtilsMessageTypeFlagsEXT)(
-				vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral
-				| vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation
-				| vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance
-			),
-			.pfnUserCallback = debugCallback,
-		};
-		VULKAN_SAFE(
-			vkCreateDebugUtilsMessengerEXT,
+		vk::Instance const * const instance
+	) {
+#if 0 // how do I compile this?		
+		obj = vk::DebugUtilsMessengerEXT(
 			*instance,
-			&createInfo,
-			getAllocator(),
-			&handle
+			vk::DebugUtilsMessengerCreateInfoEXT(
+				{},
+				vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose 
+					| vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning
+					| vk::DebugUtilsMessageSeverityFlagBitsEXT::eError,
+				vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral
+					| vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation
+					| vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance,
+				debugCallback
+			)	
 		);
+#endif	
 	}
 
 // app-specific callback
