@@ -575,14 +575,9 @@ std::vector<char const *> validationLayers = {
 	"VK_LAYER_KHRONOS_validation"
 };
 
-struct VulkanDevice {
-	vk::Device obj;
-	vk::Queue graphicsQueue;
-	vk::Queue presentQueue;
-	
-	// ************** from here on down, app-specific **************
-	
-	VulkanDevice(
+namespace VulkanDevice {
+	std::tuple<vk::Device, vk::Queue, vk::Queue>
+	create(
 		vk::PhysicalDevice const physicalDevice,
 		vk::SurfaceKHR const surface,
 		std::vector<char const *> const & deviceExtensions,
@@ -607,7 +602,7 @@ struct VulkanDevice {
 		auto deviceFeatures = VkPhysicalDeviceFeatures{
 			.samplerAnisotropy = VK_TRUE,
 		};
-		obj = vk::Device(physicalDevice.createDevice(VkDeviceCreateInfo{
+		auto device = vk::Device(physicalDevice.createDevice(VkDeviceCreateInfo{
 			.sType = (VkStructureType)vk::StructureType::eDeviceCreateInfo,
 			.queueCreateInfoCount = (uint32_t)queueCreateInfos.size(),
 			.pQueueCreateInfos = queueCreateInfos.data(),
@@ -617,9 +612,9 @@ struct VulkanDevice {
 			.ppEnabledExtensionNames = deviceExtensions.data(),
 			.pEnabledFeatures = &deviceFeatures,
 		}));
-	
-		graphicsQueue = obj.getQueue(indices.graphicsFamily.value(), 0);
-		presentQueue = obj.getQueue(indices.presentFamily.value(), 0);
+		auto graphicsQueue = device.getQueue(indices.graphicsFamily.value(), 0);
+		auto presentQueue = device.getQueue(indices.presentFamily.value(), 0);
+		return std::make_tuple(device, graphicsQueue, presentQueue);
 	}
 };
 
@@ -764,19 +759,23 @@ struct VulkanSingleTimeCommand  {
 
 struct VulkanCommandPool  {
 protected:
+	//owns:
 	vk::CommandPool commandPool;
 	//held:
-	VulkanDevice const & device;
+	vk::Device const device;
+	vk::Queue const graphicsQueue;
 public:
 	auto operator()() const { return (VkCommandPool)commandPool; }
 	~VulkanCommandPool() {
-		device.obj.destroyCommandPool(commandPool);
+		device.destroyCommandPool(commandPool);
 	}
 	VulkanCommandPool(
-		VulkanDevice const & device_,
+		vk::Device const device_,
+		vk::Queue const graphicsQueue_,
 		vk::CommandPoolCreateInfo const info
-	) : commandPool(device_.obj.createCommandPool(info)),
-		device(device_) 
+	) : commandPool(device_.createCommandPool(info)),
+		device(device_),
+		graphicsQueue(graphicsQueue_)
 	{}
 
 	//copies based on the graphicsQueue
@@ -787,8 +786,8 @@ public:
 		vk::DeviceSize size
 	) const {
 		VulkanSingleTimeCommand commandBuffer(
-			device.obj,
-			device.graphicsQueue,
+			device,
+			graphicsQueue,
 			(*this)()
 		);
 		commandBuffer.cmd.copyBuffer(
@@ -807,8 +806,8 @@ public:
 		uint32_t height
 	) const {
 		VulkanSingleTimeCommand commandBuffer(
-			device.obj,
-			device.graphicsQueue,
+			device,
+			graphicsQueue,
 			(*this)()
 		);
 		commandBuffer.cmd.copyBufferToImage(
@@ -842,8 +841,8 @@ public:
 		uint32_t mipLevels
 	) const {
 		VulkanSingleTimeCommand commandBuffer(
-			device.obj,
-			device.graphicsQueue,
+			device,
+			graphicsQueue,
 			(*this)()
 		);
 
@@ -1691,7 +1690,9 @@ protected:
 	vk::Instance instance;
 	vk::DebugUtilsMessengerEXT debug;	// optional
 	vk::SurfaceKHR surface;
-	std::unique_ptr<VulkanDevice> device;
+	vk::Device device;
+	vk::Queue graphicsQueue;
+	vk::Queue presentQueue;
 	std::unique_ptr<VulkanSwapChain> swapChain;
 	std::unique_ptr<VulkanGraphicsPipeline> graphicsPipeline;
 	std::unique_ptr<VulkanCommandPool> commandPool;
@@ -1767,7 +1768,7 @@ public:
 			deviceExtensions
 		);
 		msaaSamples = ThisVulkanPhysicalDevice::getMaxUsableSampleCount(physicalDevice);
-		device = std::make_unique<VulkanDevice>(
+		std::tie(device, graphicsQueue, presentQueue) = VulkanDevice::create(
 			physicalDevice,
 			surface,
 			deviceExtensions,
@@ -1776,13 +1777,13 @@ public:
 		swapChain = std::make_unique<VulkanSwapChain>(
 			app->getScreenSize(),
 			physicalDevice,
-			device->obj,
+			device,
 			surface,
 			msaaSamples
 		);
 		graphicsPipeline = std::make_unique<VulkanGraphicsPipeline>(
 			physicalDevice,
-			device->obj,
+			device,
 			swapChain->getRenderPass(),
 			msaaSamples
 		);
@@ -1790,12 +1791,13 @@ public:
 		{
 			auto queueFamilyIndices = ThisVulkanPhysicalDevice::findQueueFamilies(physicalDevice, surface);
 			commandPool = std::make_unique<VulkanCommandPool>(
-				*device,
-				VkCommandPoolCreateInfo{
+				device,
+				graphicsQueue,
+				vk::CommandPoolCreateInfo(VkCommandPoolCreateInfo{
 					.sType = (VkStructureType)vk::StructureType::eCommandPoolCreateInfo,
 					.flags = (VkCommandPoolCreateFlags)vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
 					.queueFamilyIndex = queueFamilyIndices.graphicsFamily.value(),
-				}
+				})
 			);
 		}
 		
@@ -1808,7 +1810,7 @@ public:
 			mipLevels
 		);
 
-		textureSampler = device->obj.createSampler(
+		textureSampler = device.createSampler(
 			vk::SamplerCreateInfo(
 				VkSamplerCreateInfo{
 					.sType = (VkStructureType)vk::StructureType::eSamplerCreateInfo,
@@ -1835,7 +1837,7 @@ public:
 		
 		vertexBuffer = VulkanDeviceMemoryBuffer::makeBufferFromStaged(
 			physicalDevice,
-			device->obj,
+			device,
 			*commandPool.get(),
 			vertices.data(),
 			sizeof(vertices[0]) * vertices.size()
@@ -1843,7 +1845,7 @@ public:
 
 		indexBuffer = VulkanDeviceMemoryBuffer::makeBufferFromStaged(
 			physicalDevice,
-			device->obj,
+			device,
 			*commandPool.get(),
 			indices.data(),
 			sizeof(indices[0]) * indices.size()
@@ -1853,14 +1855,14 @@ public:
 		for (size_t i = 0; i < maxFramesInFlight; i++) {
 			uniformBuffers.push_back(std::make_unique<VulkanDeviceMemoryBuffer>(
 				physicalDevice,
-				device->obj,
+				device,
 				sizeof(UniformBufferObject),
 				vk::BufferUsageFlagBits::eUniformBuffer,
 				vk::MemoryPropertyFlagBits::eHostVisible
 				| vk::MemoryPropertyFlagBits::eHostCoherent
 			));
 			vkMapMemory(
-				device->obj,
+				device,
 				uniformBuffers[i]->getMemory(),
 				0,
 				sizeof(UniformBufferObject),
@@ -1870,7 +1872,7 @@ public:
 		}
 
 		descriptorPool = std::make_unique<VulkanDescriptorPool>(
-			device->obj,
+			device,
 			(uint32_t)maxFramesInFlight
 		);
 		
@@ -1907,14 +1909,14 @@ public:
 		vertexBuffer = {};
 		indexBuffer = {};
 		uniformBuffers.clear();
-		device->obj.destroySampler(textureSampler);
-		device->obj.destroyImageView(textureImageView);
-		device->obj.freeMemory(textureImageMemory);
-		device->obj.destroyImage(textureImage);
+		device.destroySampler(textureSampler);
+		device.destroyImageView(textureImageView);
+		device.freeMemory(textureImageMemory);
+		device.destroyImage(textureImage);
 		for (size_t i = 0; i < maxFramesInFlight; i++) {
-			device->obj.destroySemaphore(renderFinishedSemaphores[i]);
-			device->obj.destroySemaphore(imageAvailableSemaphores[i]);
-			device->obj.destroyFence(inFlightFences[i]);
+			device.destroySemaphore(renderFinishedSemaphores[i]);
+			device.destroySemaphore(imageAvailableSemaphores[i]);
+			device.destroyFence(inFlightFences[i]);
 		}
 	}
 
@@ -1952,7 +1954,7 @@ protected:
 		std::tie(textureImage, textureImageMemory) 
 		= VulkanDeviceMemoryImage::makeTextureFromStaged(
 			physicalDevice,
-			device->obj,
+			device,
 			*commandPool.get(),
 			srcData,
 			bufferSize,
@@ -1985,8 +1987,8 @@ protected:
 		}
 
 		VulkanSingleTimeCommand commandBuffer(
-			device->obj,
-			device->graphicsQueue,
+			device,
+			graphicsQueue,
 			(*commandPool)()
 		);
 
@@ -2144,11 +2146,11 @@ protected:
 			throw Common::Exception() << "here";
 		}
 #endif
-		device->obj.waitIdle();
+		device.waitIdle();
 		swapChain = std::make_unique<VulkanSwapChain>(
 			app->getScreenSize(),
 			physicalDevice,
-			device->obj,
+			device,
 			surface,
 			msaaSamples
 		);
@@ -2156,7 +2158,7 @@ protected:
 
 	void initCommandBuffers() {
 		// TODO this matches 'VulkanSingleTimeCommand' ctor
-		commandBuffers = device->obj.allocateCommandBuffers(vk::CommandBufferAllocateInfo(VkCommandBufferAllocateInfo{
+		commandBuffers = device.allocateCommandBuffers(vk::CommandBufferAllocateInfo(VkCommandBufferAllocateInfo{
 			.sType = (VkStructureType)vk::StructureType::eCommandBufferAllocateInfo,
 			.commandPool = (*commandPool)(),
 			.level = (VkCommandBufferLevel)vk::CommandBufferLevel::ePrimary,
@@ -2278,15 +2280,15 @@ protected:
 		};
 
 		for (size_t i = 0; i < maxFramesInFlight; i++) {
-			imageAvailableSemaphores[i] = device->obj.createSemaphore(semaphoreInfo);
-			renderFinishedSemaphores[i] = device->obj.createSemaphore(semaphoreInfo);
-			inFlightFences[i] = device->obj.createFence(fenceInfo);
+			imageAvailableSemaphores[i] = device.createSemaphore(semaphoreInfo);
+			renderFinishedSemaphores[i] = device.createSemaphore(semaphoreInfo);
+			inFlightFences[i] = device.createFence(fenceInfo);
 		}
 	}
 
 	void createDescriptorSets() {
 		std::vector<VkDescriptorSetLayout> layouts(maxFramesInFlight, (*graphicsPipeline->getDescriptorSetLayout())());
-		descriptorSets = device->obj.allocateDescriptorSets(
+		descriptorSets = device.allocateDescriptorSets(
 			vk::DescriptorSetAllocateInfo(VkDescriptorSetAllocateInfo{
 				.sType = (VkStructureType)vk::StructureType::eDescriptorSetAllocateInfo,
 				.descriptorPool = (*descriptorPool)(),
@@ -2324,7 +2326,7 @@ protected:
 					.pImageInfo = &imageInfo,
 				})
 			);
-			device->obj.updateDescriptorSets(
+			device.updateDescriptorSets(
 				descriptorWrites,
 				{}
 			);
@@ -2412,7 +2414,7 @@ public:
 			auto fences = Common::make_array<vk::Fence>(
 				(vk::Fence)inFlightFences[currentFrame]
 			);
-			auto result = device->obj.waitForFences(
+			auto result = device.waitForFences(
 				fences,
 				VK_TRUE,
 				UINT64_MAX
@@ -2426,7 +2428,7 @@ public:
 		uint32_t imageIndex = {};
 		{
 			auto result = vk::Result(vkAcquireNextImageKHR(
-				device->obj,
+				device,
 				(*swapChain)(),
 				UINT64_MAX,
 				imageAvailableSemaphores[currentFrame],
@@ -2446,7 +2448,7 @@ public:
 
 		updateUniformBuffer(currentFrame);
 
-		device->obj.resetFences(
+		device.resetFences(
 			Common::make_array(
 				inFlightFences[currentFrame]
 			)
@@ -2472,7 +2474,7 @@ public:
 
 		// static assert sizes match?
 		auto tmpCmdBuf = (VkCommandBuffer)commandBuffers[currentFrame];
-		device->graphicsQueue.submit(
+		graphicsQueue.submit(
 			vk::SubmitInfo(VkSubmitInfo{
 				.sType = (VkStructureType)vk::StructureType::eSubmitInfo,
 				.waitSemaphoreCount = (uint32_t)waitSemaphores.size(),
@@ -2489,7 +2491,7 @@ public:
 		auto swapChains = Common::make_array<VkSwapchainKHR>(
 			(*swapChain)()
 		);
-		auto result = device->presentQueue.presentKHR(
+		auto result = presentQueue.presentKHR(
 			vk::PresentInfoKHR(VkPresentInfoKHR{
 				.sType = (VkStructureType)vk::StructureType::ePresentInfoKHR,
 				.waitSemaphoreCount = (uint32_t)signalSemaphores.size(),
@@ -2515,7 +2517,7 @@ public:
 	}
 public:
 	void loopDone() {
-		device->obj.waitIdle();
+		device.waitIdle();
 	}
 };
 
