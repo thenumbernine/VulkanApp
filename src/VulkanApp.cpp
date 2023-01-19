@@ -8,6 +8,7 @@
 #include <tiny_obj_loader.h>
 #include <SDL_vulkan.h>
 #include <vulkan/vulkan.hpp>
+#include <vulkan/vulkan_raii.hpp>
 #include <iostream>	//debugging only
 #include <set>
 #include <chrono>
@@ -257,90 +258,6 @@ struct UniformBufferObject {
 };
 static_assert(sizeof(UniformBufferObject) == 4 * 4 * sizeof(float) * 3);
 
-// why do I think there are already similar classes in vulkan.hpp?
-
-// hmm is it worth it to pass the child in, so that Traits can access child members, and use them for its methods?
-// or at this point do I just leave the function calls in the child class?
-template<typename Handle, typename Child>
-struct VulkanTraits;
-
-
-// null allocator.  this is all compile-resolved, right?
-// it's not going to need extra space if I inherit from it right?
-// but it will if I add it as a member?
-// or will it not add space if I only make the members static methods that use 'this' ?  same same?
-struct VulkanNullAllocator {
-	VkAllocationCallbacks * getAllocator() { return nullptr; }
-	VkAllocationCallbacks const * getAllocator() const { return nullptr; }
-};
-
-// custom allocator
-struct VulkanAllocator {
-	VkAllocationCallbacks * allocator = nullptr;
-	VkAllocationCallbacks * getAllocator() { return allocator; }
-	VkAllocationCallbacks const * getAllocator() const { return allocator; }
-};
-
-namespace vk {
-
-template<
-	typename Handle_,
-	typename Allocator = VulkanNullAllocator
->
-struct Wrapper : public Allocator {
-	using Handle = Handle_;
-protected:
-	Handle handle = {};
-public:
-	Wrapper() {}
-
-//vptr?  dtor?  child class?
-//	~Wrapper() { release(); }
-
-	Wrapper(Handle const handle_)
-	: handle(handle_) {}
-#if 1
-	Wrapper(Wrapper<Handle, Allocator> && o)
-	: handle(o.handle) {
-		o.handle = {};
-	}
-	Wrapper<Handle, Allocator> & operator=(Wrapper<Handle, Allocator> && o) {
-		if (this != &o) {
-			handle = o.handle;
-			o.handle = {};
-		}
-		return *this;
-	}
-	Wrapper(Wrapper<Handle, Allocator> & o)
-	: handle(o.handle) {
-		o.handle = {};
-	}
-	Wrapper<Handle, Allocator> & operator=(Wrapper<Handle, Allocator> & o) {
-		if (this != &o) {
-			handle = o.handle;
-			o.handle = {};
-		}
-		return *this;
-	}
-	Wrapper(Wrapper<Handle, Allocator> const & o) = delete;
-	Wrapper<Handle, Allocator> & operator=(Wrapper<Handle, Allocator> const & o) = delete;
-#endif
-
-	Handle const & operator()() const { return ASSERTHANDLE(handle); }
-	Handle operator()() { return ASSERTHANDLE(handle); }
-	//Handle & operator()() { return ASSERTHANDLE(handle); }
-	//Handle && operator()() { return ASSERTHANDLE(handle); }
-
-	void release() {
-		handle = {};
-	}
-};
-
-}
-
-template<typename... Args>
-using VulkanHandle = vk::Wrapper<Args...>;
-
 struct ThisVulkanDebugMessenger {
 	static auto create(
 		vk::Instance const & instance
@@ -471,7 +388,7 @@ struct ThisVulkanPhysicalDevice {
 	// used by the application for specific physical device querying (should be a subclass of the general vk::PhysicalDevice)
 	static auto create(
 		vk::Instance const & instance,
-		VkSurfaceKHR surface,
+		vk::SurfaceKHR surface,
 		std::vector<char const *> const & deviceExtensions
 	) {
 		vk::PhysicalDevice desiredPhysDev = {};
@@ -507,7 +424,7 @@ public:
 
 	static auto querySwapChainSupport(
 		vk::PhysicalDevice physDev,
-		VkSurfaceKHR surface
+		vk::SurfaceKHR surface
 	) {
 		return SwapChainSupportDetails{
 			.capabilities = physDev.getSurfaceCapabilitiesKHR(surface),
@@ -519,7 +436,7 @@ public:
 protected:
 	static bool isDeviceSuitable(
 		vk::PhysicalDevice physDev,
-		VkSurfaceKHR surface,
+		vk::SurfaceKHR surface,
 		std::vector<char const *> const & deviceExtensions
 	) {
 		auto indices = findQueueFamilies(physDev, surface);
@@ -577,7 +494,7 @@ public:
 	// needs surface
 	static QueueFamilyIndices findQueueFamilies(
 		vk::PhysicalDevice physDev,
-		VkSurfaceKHR surface
+		vk::SurfaceKHR surface
 	) {
 		QueueFamilyIndices indices;
 		auto queueFamilies = physDev.getQueueFamilyProperties();
@@ -659,124 +576,19 @@ std::vector<char const *> validationLayers = {
 };
 
 struct VulkanDevice {
-protected:
-	vk::Device device;
+	vk::Device obj;
 	vk::Queue graphicsQueue;
 	vk::Queue presentQueue;
-public:
-	auto operator()() const { return (VkDevice)device; }
-	auto const & getDevice() const { return device; }
-	auto const & getGraphicsQueue() const { return graphicsQueue; }
-	auto const & getPresentQueue() const { return presentQueue; }
 	
-	// should this return a handle or an object?
-	// I'll return a handle like the create*** functions
-	auto getQueue(
-		uint32_t queueFamilyIndex,
-		uint32_t queueIndex = 0
-	) const {
-		auto result = VkQueue{};
-		vkGetDeviceQueue(device, queueFamilyIndex, queueIndex, &result);
-		return vk::Queue(result);
-	}
-	
-	// maybe there's no need for these 'create' functions
-
-#define CREATE_CREATER(name, suffix)\
-	Vk##name##suffix create##name(\
-		Vk##name##CreateInfo##suffix const * const createInfo,\
-		VkAllocationCallbacks const * const allocator = nullptr/*getAllocator()*/\
-	) const {\
-		auto result = Vk##name##suffix{};\
-		VULKAN_SAFE(vkCreate##name##suffix, device, createInfo, allocator, &result);\
-		return result;\
-	}
-
-	// meanwhile all these return handles, not wrappers.
-CREATE_CREATER(Swapchain, KHR)
-CREATE_CREATER(RenderPass, )
-CREATE_CREATER(Buffer, )
-CREATE_CREATER(Sampler, )
-CREATE_CREATER(Image, )
-CREATE_CREATER(ImageView, )
-CREATE_CREATER(Framebuffer, )
-CREATE_CREATER(DescriptorSetLayout, )
-CREATE_CREATER(ShaderModule, )
-CREATE_CREATER(PipelineLayout, )
-CREATE_CREATER(CommandPool, )
-
-	VkDeviceMemory allocateMemory(
-		VkMemoryAllocateInfo const * const info,
-		VkAllocationCallbacks const * const allocator = nullptr/*getAllocator()*/
-	) const {
-		auto result = VkDeviceMemory{};
-		VULKAN_SAFE(vkAllocateMemory, device, info, allocator, &result);
-		return result;
-	}
-
-	VkPipeline createGraphicsPipelines(
-		VkPipelineCache pipelineCache,
-		size_t numCreateInfo,
-		VkGraphicsPipelineCreateInfo const * const createInfo,
-		VkAllocationCallbacks const * const allocator = nullptr//getAllocator()
-	) const {
-		auto result = VkPipeline{};
-		VULKAN_SAFE(vkCreateGraphicsPipelines,
-			device,
-			pipelineCache,
-			numCreateInfo,
-			createInfo,
-			allocator,
-			&result
-		);
-		return result;
-	}
-	
-	void waitIdle() const {
-		VULKAN_SAFE(vkDeviceWaitIdle, device);
-	}
-
-	// TODO make these VulkanFence methods?
-
-	template<
-		typename FencesType = std::array<VkFence, 0>
-	>
-	void resetFences(
-		FencesType const & fences
-	) const {
-		VULKAN_SAFE(vkResetFences,
-			device,
-			(uint32_t)fences.size(),
-			fences.data()
-		);
-	}
-
-	template<
-		typename FencesType = std::array<VkFence, 0>
-	>
-	void waitForFences(
-		FencesType const & fences,
-		bool waitAll = true,
-		uint64_t timeout = UINT64_MAX
-	) const {
-		VULKAN_SAFE(vkWaitForFences,
-			device,
-			(uint32_t)fences.size(),
-			fences.data(),
-			waitAll ? VK_TRUE : VK_FALSE,
-			timeout
-		);
-	}
-
 	// ************** from here on down, app-specific **************
 	
 	VulkanDevice(
-		vk::PhysicalDevice const * const physicalDevice,
-		vk::SurfaceKHR const * const surface,
+		vk::PhysicalDevice const physicalDevice,
+		vk::SurfaceKHR const surface,
 		std::vector<char const *> const & deviceExtensions,
 		bool enableValidationLayers
 	) {
-		auto indices = ThisVulkanPhysicalDevice::findQueueFamilies(*physicalDevice, *surface);
+		auto indices = ThisVulkanPhysicalDevice::findQueueFamilies(physicalDevice, surface);
 
 		auto queuePriorities = Common::make_array<float>(1);
 		std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
@@ -795,7 +607,7 @@ CREATE_CREATER(CommandPool, )
 		auto deviceFeatures = VkPhysicalDeviceFeatures{
 			.samplerAnisotropy = VK_TRUE,
 		};
-		device = vk::Device(physicalDevice->createDevice(VkDeviceCreateInfo{
+		obj = vk::Device(physicalDevice.createDevice(VkDeviceCreateInfo{
 			.sType = (VkStructureType)vk::StructureType::eDeviceCreateInfo,
 			.queueCreateInfoCount = (uint32_t)queueCreateInfos.size(),
 			.pQueueCreateInfos = queueCreateInfos.data(),
@@ -806,15 +618,15 @@ CREATE_CREATER(CommandPool, )
 			.pEnabledFeatures = &deviceFeatures,
 		}));
 	
-		graphicsQueue = getQueue(indices.graphicsFamily.value());
-		presentQueue = getQueue(indices.presentFamily.value());
+		graphicsQueue = obj.getQueue(indices.graphicsFamily.value(), 0);
+		presentQueue = obj.getQueue(indices.presentFamily.value(), 0);
 	}
 };
 
 struct ThisVulkanRenderPass  {
 	static auto create(
-		vk::PhysicalDevice const * const physicalDevice,
-		VulkanDevice const * const device_,
+		vk::PhysicalDevice const physicalDevice,
+		vk::Device const & device,
 		vk::Format swapChainImageFormat,
 		vk::SampleCountFlagBits msaaSamples
 	) {
@@ -830,7 +642,7 @@ struct ThisVulkanRenderPass  {
 				.finalLayout = (VkImageLayout)vk::ImageLayout::eColorAttachmentOptimal,
 			},
 			VkAttachmentDescription{	//depthAttachment
-				.format = (VkFormat)ThisVulkanPhysicalDevice::findDepthFormat(*physicalDevice),
+				.format = (VkFormat)ThisVulkanPhysicalDevice::findDepthFormat(physicalDevice),
 				.samples = (VkSampleCountFlagBits)msaaSamples,
 				.loadOp = (VkAttachmentLoadOp)vk::AttachmentLoadOp::eClear,
 				.storeOp = (VkAttachmentStoreOp)vk::AttachmentStoreOp::eDontCare,
@@ -890,7 +702,7 @@ struct ThisVulkanRenderPass  {
 				),
 			}
 		);
-		auto renderPassInfo = VkRenderPassCreateInfo{
+		return device.createRenderPass(vk::RenderPassCreateInfo(VkRenderPassCreateInfo{
 			.sType = (VkStructureType)vk::StructureType::eRenderPassCreateInfo,
 			.attachmentCount = (uint32_t)attachments.size(),
 			.pAttachments = attachments.data(),
@@ -898,608 +710,112 @@ struct ThisVulkanRenderPass  {
 			.pSubpasses = subpasses.data(),
 			.dependencyCount = (uint32_t)dependencies.size(),
 			.pDependencies = dependencies.data(),
-		};
-		return vk::RenderPass(device_->createRenderPass(&renderPassInfo));
+		}));
 	}
 };
 
-struct VulkanBuffer : public VulkanHandle<VkBuffer> {
-	using Super = VulkanHandle<VkBuffer>;
-	using CreateInfo = VkBufferCreateInfo;
-protected:
-	//holds
-	VulkanDevice const * device = {};
-public:
-	~VulkanBuffer() {
-		if (handle) vkDestroyBuffer((*device)(), handle, getAllocator());
-	}
+struct VulkanSingleTimeCommand  {
+	//owns:
+	vk::CommandBuffer cmd;
+	//held:
+	vk::Device const device;
+	vk::Queue const queue;
+	vk::CommandPool const commandPool;
 
-	// also in VulkanHandle
-#if 1
-	VulkanBuffer(VulkanBuffer && o)
-	: Super(o.handle) {
-		o.handle = {};
-	}
-	VulkanBuffer & operator=(VulkanBuffer && o) {
-		if (this != &o) {
-			handle = o.handle;
-			o.handle = {};
-		}
-		return *this;
-	}
-	VulkanBuffer(VulkanBuffer & o)
-	: Super(o.handle) {
-		o.handle = {};
-	}
-	VulkanBuffer & operator=(VulkanBuffer & o) {
-		if (this != &o) {
-			handle = o.handle;
-			o.handle = {};
-		}
-		return *this;
-	}
-	VulkanBuffer(VulkanBuffer const & o) = delete;
-	VulkanBuffer & operator=(VulkanBuffer const & o) = delete;
-#endif
-
-	VulkanBuffer(
-		VkBuffer handle_,
-		VulkanDevice const * const device_
-	) : Super(handle_),
-		device(device_)
-	{}
-
-	VulkanBuffer(
-		VulkanDevice const * const device_,
-		CreateInfo const info
-	) : Super(device_->createBuffer(&info, getAllocator())),
-		device(device_)
-	{}
-
-	auto getMemoryRequirements() const {
-		auto result = VkMemoryRequirements{};
-		vkGetBufferMemoryRequirements((*device)(), (*this)(), &result);
-		return result;
-	}
-
-	void bindMemory(
-		VkDeviceMemory const mem,
-		VkDeviceSize offset = 0
-	) const {
-		VULKAN_SAFE(vkBindBufferMemory, (*device)(), (*this)(), mem, offset);
-	}
-};
-
-struct VulkanDeviceMemory : public VulkanHandle<VkDeviceMemory> {
-	using Super = VulkanHandle<VkDeviceMemory>;
-protected:
-	//holds
-	VulkanDevice const * device = {};
-public:
-	~VulkanDeviceMemory() {
-		if (handle) vkFreeMemory((*device)(), handle, Super::getAllocator());
-	}
-
-	VulkanDeviceMemory(
-		VkDeviceMemory handle_,
-		VulkanDevice const * const device_
-	) : Super(handle_),
-		device(device_)
-	{}
-
-	VulkanDeviceMemory(
-		VulkanDevice const * const device_,
-		VkMemoryAllocateInfo const info
-	) : Super(device_->allocateMemory(&info, getAllocator())),
-		device(device_)
-	{}
-
-	// also in VulkanHandle
-#if 1
-	VulkanDeviceMemory(VulkanDeviceMemory && o)
-	: Super(o.handle) {
-		o.handle = {};
-	}
-	VulkanDeviceMemory & operator=(VulkanDeviceMemory && o) {
-		if (this != &o) {
-			handle = o.handle;
-			o.handle = {};
-		}
-		return *this;
-	}
-	VulkanDeviceMemory(VulkanDeviceMemory & o)
-	: Super(o.handle) {
-		o.handle = {};
-	}
-	VulkanDeviceMemory & operator=(VulkanDeviceMemory & o) {
-		if (this != &o) {
-			handle = o.handle;
-			o.handle = {};
-		}
-		return *this;
-	}
-	VulkanDeviceMemory(VulkanDeviceMemory const & o) = delete;
-	VulkanDeviceMemory & operator=(VulkanDeviceMemory const & o) = delete;
-#endif
-
-};
-
-/*
-ok i've got
-- VkBuffer with VkDeviceMemory
-- VkImage with VkDeviceMemory
-- VkImage with VkImageView (and VkFramebuffer?)
-*/
-struct VulkanImage : public VulkanHandle<VkImage> {
-	using Super = VulkanHandle<VkImage>;
-	using CreateInfo = VkImageCreateInfo;
-protected:
-	//holds
-	VulkanDevice const * const device = {};
-public:
-	~VulkanImage() {
-		if (handle) vkDestroyImage((*device)(), handle, getAllocator());
-	}
-
-	VulkanImage(
-		VkImage handle_,
-		VulkanDevice const * const device_
-	) : Super(handle_),
-		device(device_)
-	{}
-
-	VulkanImage(
-		VulkanDevice const * const device_,
-		CreateInfo const info
-	) : Super(device_->createImage(&info, getAllocator())),
-		device(device_)
-	{}
-
-	// also in VulkanHandle
-#if 1
-	VulkanImage(VulkanImage && o)
-	: Super(o.handle) {
-		o.handle = {};
-	}
-	VulkanImage & operator=(VulkanImage && o) {
-		if (this != &o) {
-			handle = o.handle;
-			o.handle = {};
-		}
-		return *this;
-	}
-	VulkanImage(VulkanImage & o)
-	: Super(o.handle) {
-		o.handle = {};
-	}
-	VulkanImage & operator=(VulkanImage & o) {
-		if (this != &o) {
-			handle = o.handle;
-			o.handle = {};
-		}
-		return *this;
-	}
-	VulkanImage(VulkanImage const & o) = delete;
-	VulkanImage & operator=(VulkanImage const & o) = delete;
-#endif
-
-	auto getMemoryRequirements() const {
-		auto result = VkMemoryRequirements{};
-		vkGetImageMemoryRequirements((*device)(), (*this)(), &result);
-		return result;
-	}
-
-	void bindMemory(
-		VkDeviceMemory const mem,
-		VkDeviceSize offset = 0
-	) const {
-		VULKAN_SAFE(vkBindImageMemory, (*device)(), (*this)(), mem, offset);
-	}
-};
-
-struct VulkanImageView : public VulkanHandle<VkImageView> {
-	using Super = VulkanHandle<VkImageView>;
-	using CreateInfo = VkImageViewCreateInfo;
-protected:
-	//holds
-	VulkanDevice const * device = {};
-public:
-	~VulkanImageView() {
-		if (handle) vkDestroyImageView((*device)(), handle, getAllocator());
-	}
-
-	//should I put handle first since all subclasses of VulkanHandle have handle-first?
-	// (but not all have device-first)
-	//or should I put device first since all ctors of VulkanImageView have device required (but not necessarily handle) ?
-	VulkanImageView(
-		VkImageView handle_,
-		VulkanDevice const * const device_
-	) : Super(handle_),
-		device(device_)
-	{}
-
-	VulkanImageView(
-		VulkanDevice const * const device_,
-		CreateInfo const info
-	) : Super(device_->createImageView(&info, getAllocator())),
-		device(device_)
-	{}
-};
-
-struct VulkanSampler : public VulkanHandle<VkSampler> {
-	using Super = VulkanHandle<VkSampler>;
-	using CreateInfo = VkSamplerCreateInfo;
-protected:
-	//holds
-	VulkanDevice const * device = {};
-public:
-	~VulkanSampler() {
-		if (handle) vkDestroySampler((*device)(), handle, getAllocator());
-	}
-
-	VulkanSampler(
-		VkSampler handle_,
-		VulkanDevice const * const device_
-	) : Super(handle_),
-		device(device_)
-	{}
-
-	VulkanSampler(
-		VulkanDevice const * const device_,
-		CreateInfo const info
-	) : Super(device_->createSampler(&info, getAllocator())),
-		device(device_)
-	{}
-};
-
-struct VulkanCommandBuffer : public VulkanHandle<VkCommandBuffer> {
-	using Super = VulkanHandle<VkCommandBuffer>;
-protected:
-	VulkanDevice const * const device = {};
-	VkCommandPool commandPool = {};
-public:
-	~VulkanCommandBuffer() {
-		if (handle) vkFreeCommandBuffers((*device)(), commandPool, 1, &handle);
-	}
-
-#if 1
-	VulkanCommandBuffer(Handle handle_) : Super(handle_) {}
-	VulkanCommandBuffer(VulkanCommandBuffer && o)
-	: Super(o.handle) {
-		o.handle = {};
-	}
-	VulkanCommandBuffer & operator=(VulkanCommandBuffer && o) {
-		if (this != &o) {
-			handle = o.handle;
-			o.handle = {};
-		}
-		return *this;
-	}
-	VulkanCommandBuffer(VulkanCommandBuffer & o)
-	: Super(o.handle) {
-		o.handle = {};
-	}
-	VulkanCommandBuffer & operator=(VulkanCommandBuffer & o) {
-		if (this != &o) {
-			handle = o.handle;
-			o.handle = {};
-		}
-		return *this;
-	}
-	VulkanCommandBuffer(VulkanCommandBuffer const & o) = delete;
-	VulkanCommandBuffer & operator=(VulkanCommandBuffer const & o) = delete;
-#endif
-
-	VulkanCommandBuffer(
-		VkCommandBuffer const handle_,
-		VulkanDevice const * const device_,
-		VkCommandPool const commandPool_
-	) : Super(handle_),
-		device(device_),
-		commandPool(commandPool_)
-	{}
-
-	void reset(
-		VkCommandBufferResetFlags const flags
-	) const {
-		VULKAN_SAFE(vkResetCommandBuffer, (*this)(), flags);
-	}
-
-	void begin(
-		VkCommandBufferBeginInfo const info
-	) const {
-		VULKAN_SAFE(vkBeginCommandBuffer, handle, &info);
-	}
-
-	void end() const {
-		VULKAN_SAFE(vkEndCommandBuffer, handle);
-	}
-
-	void copyBuffer(
-		VkBuffer const srcBuffer,
-		VkBuffer const dstBuffer,
-		VkBufferCopy const region
-	) const {
-		vkCmdCopyBuffer(
-			(*this)(),
-			srcBuffer,
-			dstBuffer,
-			1,	//count ... TODO make an array-based one?
-			&region);
-	}
-
-	void copyBufferToImage(
-		VkBuffer const srcBuffer,
-		VkImage const dstImage,
-		vk::ImageLayout const dstImageLayout,
-		uint32_t width,
-		uint32_t height,
-		VkBufferImageCopy const region
-	) const {
-		vkCmdCopyBufferToImage(
-			(*this)(),
-			srcBuffer,
-			dstImage,
-			(VkImageLayout)dstImageLayout,
-			1,	//count ... TODO make an array-based one?
-			&region
-		);
-	}
-
-	void pipelineBarrier(
-		vk::PipelineStageFlags const srcStageMask,
-		vk::PipelineStageFlags const dstStageMask,
-		vk::DependencyFlags const dependencyFlags,
-		vk::MemoryBarrier const & memBarrier,
-		vk::BufferMemoryBarrier const & bufferMemBarrier,
-		vk::ImageMemoryBarrier const & imageMemBarrier
-	) const {
-		vkCmdPipelineBarrier(
-			(*this)(),
-			(VkPipelineStageFlags)srcStageMask,
-			(VkPipelineStageFlags)dstStageMask,
-			(VkDependencyFlags)dependencyFlags,
-			1,
-			reinterpret_cast<VkMemoryBarrier const *>(&memBarrier),
-			1,
-			reinterpret_cast<VkBufferMemoryBarrier const *>(&bufferMemBarrier),
-			1,
-			reinterpret_cast<VkImageMemoryBarrier const *>(&imageMemBarrier)
-		);
-	}
-
-	void beginRenderPass(
-		VkRenderPassBeginInfo const info,
-		VkSubpassContents const contents
-	) const {
-		vkCmdBeginRenderPass(
-			handle,
-			&info,
-			contents
-		);
-	}
-
-	void endRenderPass() const {
-		vkCmdEndRenderPass(handle);
-	}
-
-	void bindPipeline(
-		VkPipelineBindPoint const pipelineBindPoint,
-		VkPipeline const pipeline
-	) const {
-		vkCmdBindPipeline(
-			handle,
-			pipelineBindPoint,
-			pipeline
-		);
-	}
-
-	//the args also has 'first' and 'count'
-	// but ... why not just ptr-add to offset 'first'?
-	// so 'count' is all thats needed ...
-	template<
-		typename ViewportsType = std::array<VkViewport, 0>
-	>
-	void setViewport(
-		ViewportsType const & viewports
-	) const {
-		vkCmdSetViewport(
-			handle,
-			0,
-			(uint32_t)viewports.size(),
-			viewports.data()
-		);
-	}
-
-	template<
-		typename ScissorsType = std::array<VkRect2D, 0>
-	>
-	void setScissor(
-		ScissorsType const & scissors
-	) const {
-		vkCmdSetScissor(
-			handle,
-			0,
-			(uint32_t)scissors.size(),
-			scissors.data()
-		);
-	}
-
-	template<
-		typename BuffersType = std::array<VkBuffer, 0>,
-		typename DeviceSizesType = std::array<VkDeviceSize, 0>
-	>
-	void bindVertexBuffers(
-		BuffersType const & buffers,
-		DeviceSizesType const & offsets
-	) const {
-		vkCmdBindVertexBuffers(
-			handle,
-			0,
-			(uint32_t)buffers.size(),
-			buffers.data(),
-			// size matches vertexBuffers.size()?
-			offsets.data()
-		);
-	}
-
-	void bindIndexBuffer(
-		VkBuffer const buffer,
-		VkDeviceSize const offset,
-		vk::IndexType const indexType
-	) const {
-		vkCmdBindIndexBuffer(
-			handle,
-			buffer,
-			offset,
-			(VkIndexType)indexType
-		);
-	}
-
-	void bindDescriptorSets(
-		vk::PipelineBindPoint pipelineBindPoint,
-		VkPipelineLayout layout,
-		uint32_t firstSet,
-		VkDescriptorSet const descriptorSets,
-		uint32_t dynamicOffset
-	) const {
-		vkCmdBindDescriptorSets(
-			handle,
-			(VkPipelineBindPoint)pipelineBindPoint,
-			layout,
-			firstSet,
-			1,
-			&descriptorSets,
-			1,
-			&dynamicOffset
-		);
-	}
-
-	void drawIndexed(
-		uint32_t indexCount,
-		uint32_t instanceCount,
-		uint32_t firstIndex,
-		int32_t vertexOffset,
-		uint32_t firstInstance
-	) const {
-		vkCmdDrawIndexed(
-			handle,
-			indexCount,
-			instanceCount,
-			firstIndex,
-			vertexOffset,
-			firstInstance
-		);
-	}
-
-	template<
-		typename RegionsType = std::array<VkImageBlit, 0>
-	>
-	void blitImage(
-		VkImage srcImage,
-		vk::ImageLayout srcImageLayout,
-		VkImage dstImage,
-		vk::ImageLayout dstImageLayout,
-		RegionsType const & regions,
-		vk::Filter filter
-	) const {
-		vkCmdBlitImage(
-			handle,
-			srcImage,
-			(VkImageLayout)srcImageLayout,
-			dstImage,
-			(VkImageLayout)dstImageLayout,
-			(uint32_t)regions.size(),
-			regions.data(),
-			(VkFilter)filter
-		);
-	}
-};
-
-struct VulkanSingleTimeCommand : public VulkanCommandBuffer {
-	using Super = VulkanCommandBuffer;
 	VulkanSingleTimeCommand(
-		VulkanDevice const * const device_,
-		VkCommandPool commandPool_
-	) : Super({}, device_, commandPool_)
+		vk::Device const device_,
+		vk::Queue const queue_,
+		vk::CommandPool commandPool_
+	) : device(device_),
+		queue(queue_),
+		commandPool(commandPool_)
 	{
-		// TODO this matches 'initCommandBuffers' for each frame-in-flight
-		auto allocInfo = VkCommandBufferAllocateInfo{
-			.sType = (VkStructureType)vk::StructureType::eCommandBufferAllocateInfo,
-			.commandPool = commandPool,
-			.level = (VkCommandBufferLevel)vk::CommandBufferLevel::ePrimary,
-			.commandBufferCount = 1,
-		};
-		vkAllocateCommandBuffers((*device)(), &allocInfo, &handle);
+		cmd = device.allocateCommandBuffers(
+			vk::CommandBufferAllocateInfo(
+				VkCommandBufferAllocateInfo{
+					.sType = (VkStructureType)vk::StructureType::eCommandBufferAllocateInfo,
+					.commandPool = commandPool,
+					.level = (VkCommandBufferLevel)vk::CommandBufferLevel::ePrimary,
+					.commandBufferCount = 1,
+				}
+			)
+		)[0];
 		// end part that matches
 		// and this part kinda matches the start of 'recordCommandBuffer'
-		begin(VkCommandBufferBeginInfo{
+		cmd.begin(vk::CommandBufferBeginInfo(VkCommandBufferBeginInfo{
 			.sType = (VkStructureType)vk::StructureType::eCommandBufferBeginInfo,
 			.flags = (VkCommandBufferUsageFlags)vk::CommandBufferUsageFlagBits::eOneTimeSubmit,
-		});
+		}));
 		//end part that matches
 	}
 	
 	~VulkanSingleTimeCommand() {
-		end();
-		auto const & queue = device->getGraphicsQueue();
+		cmd.end();
+		auto cmds = Common::make_array((VkCommandBuffer)cmd);
 		queue.submit(vk::SubmitInfo(VkSubmitInfo{
 			.sType = (VkStructureType)vk::StructureType::eSubmitInfo,
-			.commandBufferCount = 1,
-			.pCommandBuffers = &handle,
+			.commandBufferCount = (uint32_t)cmds.size(),
+			.pCommandBuffers = cmds.data(),
 		}));
 		queue.waitIdle();
+		device.freeCommandBuffers(commandPool, cmd);
 	}
 };
 
-struct VulkanCommandPool : public VulkanHandle<VkCommandPool> {
-	using Super = VulkanHandle<VkCommandPool>;
-	using CreateInfo = VkCommandPoolCreateInfo;
+struct VulkanCommandPool  {
 protected:
+	vk::CommandPool commandPool;
 	//held:
-	VulkanDevice const * const device = {};
+	VulkanDevice const & device;
 public:
+	auto operator()() const { return (VkCommandPool)commandPool; }
 	~VulkanCommandPool() {
-		if (handle) vkDestroyCommandPool((*device)(), handle, getAllocator());
+		device.obj.destroyCommandPool(commandPool);
 	}
 	VulkanCommandPool(
-		VulkanDevice const * const device_,
-		CreateInfo const info
-	) : Super(device_->createCommandPool(&info)),
+		VulkanDevice const & device_,
+		vk::CommandPoolCreateInfo const info
+	) : commandPool(device_.obj.createCommandPool(info)),
 		device(device_) 
 	{}
 
 	//copies based on the graphicsQueue
 	// used by makeBufferFromStaged
 	void copyBuffer(
-		VkBuffer srcBuffer,	//staging VkBuffer
-		VkBuffer dstBuffer,	//dest VkBuffer
-		VkDeviceSize size
+		vk::Buffer srcBuffer,	//staging VkBuffer
+		vk::Buffer dstBuffer,	//dest VkBuffer
+		vk::DeviceSize size
 	) const {
-		VulkanSingleTimeCommand(device, (*this)())
-		.copyBuffer(
+		VulkanSingleTimeCommand commandBuffer(
+			device.obj,
+			device.graphicsQueue,
+			(*this)()
+		);
+		commandBuffer.cmd.copyBuffer(
 			srcBuffer,
 			dstBuffer,
-			VkBufferCopy{
+			vk::BufferCopy(VkBufferCopy{
 				.size = size,
-			}
+			})
 		);
 	}
 
 	void copyBufferToImage(
-		VkBuffer buffer,
-		VkImage image,
+		vk::Buffer buffer,
+		vk::Image image,
 		uint32_t width,
 		uint32_t height
 	) const {
-		VulkanSingleTimeCommand(device, (*this)())
-		.copyBufferToImage(
+		VulkanSingleTimeCommand commandBuffer(
+			device.obj,
+			device.graphicsQueue,
+			(*this)()
+		);
+		commandBuffer.cmd.copyBufferToImage(
 			buffer,
 			image,
 			vk::ImageLayout::eTransferDstOptimal,
-			width,
-			height,
-			VkBufferImageCopy{
+			vk::BufferImageCopy(VkBufferImageCopy{
 				.bufferOffset = 0,
 				.bufferRowLength = 0,
 				.bufferImageHeight = 0,
@@ -1515,7 +831,7 @@ public:
 					height,
 					1
 				},
-			}
+			})
 		);
 	}
 
@@ -1525,7 +841,11 @@ public:
 		vk::ImageLayout newLayout,
 		uint32_t mipLevels
 	) const {
-		VulkanSingleTimeCommand commandBuffer(device, (*this)());
+		VulkanSingleTimeCommand commandBuffer(
+			device.obj,
+			device.graphicsQueue,
+			(*this)()
+		);
 
 		auto barrier = vk::ImageMemoryBarrier(
 			{},
@@ -1567,7 +887,7 @@ public:
 			throw Common::Exception() << "unsupported layout transition!";
 		}
 
-		commandBuffer.pipelineBarrier(
+		commandBuffer.cmd.pipelineBarrier(
 			sourceStage,
 			destinationStage,
 			{},
@@ -1578,139 +898,114 @@ public:
 	}
 };
 
-// methods common to VkBuffer or VkImage paired with VkDeviceMemory
-template<typename Super_>
-struct VulkanDeviceMemoryParent  : public Super_ {
-	using Super = Super_;
-protected:
-	//owns
-	VulkanDeviceMemory memory;
-	//holds
-	VulkanDevice const * device = {};
-public:
-	VulkanDeviceMemory const & getMemory() const { return memory; }
-
-	VulkanDeviceMemoryParent(
-		Super::Handle handle_,
-		VkDeviceMemory memory_,
-		VulkanDevice const * const device_
-	) : Super(handle_, device_),
-		memory(memory_, device_),
-		device(device_)
-	{}
-
-	VulkanDeviceMemoryParent(
-		VulkanDevice const * const device_,
-		Super::CreateInfo const info,
-		VkDeviceMemory memory_
-	) : Super(device_, info),
-		memory(memory_, device_),
-		device(device_)
-	{}
-};
-
-struct VulkanDeviceMakeFromStagingBuffer : public VulkanDeviceMemoryParent<VulkanBuffer> {
-	using Super = VulkanDeviceMemoryParent<VulkanBuffer>;
-	using Super::Super;
-
-	VulkanDeviceMakeFromStagingBuffer(
-		vk::PhysicalDevice const * const physicalDevice,
-		VulkanDevice const * const device_,
+namespace VulkanDeviceMakeFromStagingBuffer {
+	std::pair<vk::Buffer, vk::DeviceMemory>
+	create(
+		vk::PhysicalDevice const physicalDevice,
+		vk::Device const device,
 		void const * const srcData,
 		size_t bufferSize
-	) : Super(
-		device_,
-		vk::BufferCreateInfo(VkBufferCreateInfo{
-			.size = bufferSize,
-			.usage = (VkBufferUsageFlags)vk::BufferUsageFlagBits::eTransferSrc,
-			.sharingMode = (VkSharingMode)vk::SharingMode::eExclusive,
-		}),
-		{}
 	) {
-		auto memRequirements = Super::getMemoryRequirements();
-		Super::memory = VulkanDeviceMemory(device, VkMemoryAllocateInfo{
+		auto buffer = device.createBuffer(
+			vk::BufferCreateInfo(VkBufferCreateInfo{
+				.size = bufferSize,
+				.usage = (VkBufferUsageFlags)vk::BufferUsageFlagBits::eTransferSrc,
+				.sharingMode = (VkSharingMode)vk::SharingMode::eExclusive,
+			})
+		);
+		auto memRequirements = device.getBufferMemoryRequirements(buffer);
+		auto mem = device.allocateMemory(vk::MemoryAllocateInfo(VkMemoryAllocateInfo{
 			.sType = (VkStructureType)vk::StructureType::eMemoryAllocateInfo,
 			.allocationSize = memRequirements.size,
 			.memoryTypeIndex = ThisVulkanPhysicalDevice::findMemoryType(
-				*physicalDevice,
+				physicalDevice,
 				memRequirements.memoryTypeBits,
 				vk::MemoryPropertyFlagBits::eHostVisible
 				| vk::MemoryPropertyFlagBits::eHostCoherent
 			),
-		});
-		bindMemory(Super::memory());
+		}));
+		device.bindBufferMemory(
+			buffer,
+			mem,
+			0);
 
 		void * dstData = {};
 		vkMapMemory(
-			(*device)(),
-			getMemory()(),
+			device,
+			mem,
 			0,
 			bufferSize,
 			0,
 			&dstData
 		);
 		memcpy(dstData, srcData, (size_t)bufferSize);
-		vkUnmapMemory((*device)(), getMemory()());
+		vkUnmapMemory(device, mem);
+	
+		return std::make_pair(buffer, mem);
 	}
 };
 
-struct VulkanDeviceMemoryBuffer : public VulkanDeviceMemoryParent<VulkanBuffer> {
-	using Super = VulkanDeviceMemoryParent<VulkanBuffer>;
-	using Super::Super;
+struct VulkanDeviceMemoryBuffer  {
+protected:
+	//owns
+	vk::Buffer buffer;
+	vk::DeviceMemory memory;
+	//holds
+	vk::Device const device;
+public:
+	auto operator()() const { return (VkBuffer)buffer; }
+	vk::DeviceMemory const getMemory() const { return memory; }
+
+	~VulkanDeviceMemoryBuffer() {
+		device.freeMemory(memory);
+		device.destroyBuffer(buffer);
+	}
 
 	//ctor for VkBuffer's whether they are being ctor'd by staging or by uniforms whatever
 	VulkanDeviceMemoryBuffer(
-		vk::PhysicalDevice const * const physicalDevice,
-		VulkanDevice const * const device_,
+		vk::PhysicalDevice const physicalDevice,
+		vk::Device const device_,
 		vk::DeviceSize size,
 		vk::BufferUsageFlags usage,
 		vk::MemoryPropertyFlags properties
-	)
-#if 0	// new
-// TODO get	VulkanDeviceMemoryParent to pass-thru correctly
-	: Super(
-		device_,
-		VkBufferCreateInfo{
-			.sType = (VkStructureType)vk::StructureType::eBufferCreateInfo,
-			.size = size,
-			.usage = usage,
-			.sharingMode = vk::SharingMode::eExclusive,
-		}
-	) {
-#else 	//old
-	: Super({}, {}, device_) {
-		auto bufferInfo = vk::BufferCreateInfo(VkBufferCreateInfo{
-			.flags = (VkBufferCreateFlags)vk::BufferCreateFlags(),
-			.size = size,
-			.usage = (VkBufferUsageFlags)usage,
-			.sharingMode = (VkSharingMode)vk::SharingMode::eExclusive,
-		});
-		auto bufferInfoR = (VkBufferCreateInfo)bufferInfo;
-		Super::handle = device_->createBuffer(&bufferInfoR);
-#endif
-
-		auto memRequirements = Super::getMemoryRequirements();
-		Super::memory = VulkanDeviceMemory(device, VkMemoryAllocateInfo{
+	) : device(device_) {
+		buffer = device_.createBuffer(
+			vk::BufferCreateInfo(VkBufferCreateInfo{
+				.flags = (VkBufferCreateFlags)vk::BufferCreateFlags(),
+				.size = size,
+				.usage = (VkBufferUsageFlags)usage,
+				.sharingMode = (VkSharingMode)vk::SharingMode::eExclusive,
+			})
+		);
+		
+		auto memRequirements = device.getBufferMemoryRequirements(buffer);
+		memory = device.allocateMemory(vk::MemoryAllocateInfo(VkMemoryAllocateInfo{
 			.sType = (VkStructureType)vk::StructureType::eMemoryAllocateInfo,
 			.allocationSize = memRequirements.size,
 			.memoryTypeIndex = ThisVulkanPhysicalDevice::findMemoryType(
-				*physicalDevice,
+				physicalDevice,
 				memRequirements.memoryTypeBits,
 				properties
 			),
-		});
-		bindMemory(Super::memory());
+		}));
+		device.bindBufferMemory(
+			buffer,
+			memory,
+			0);
 	}
 
 public:
 	static std::unique_ptr<VulkanDeviceMemoryBuffer> makeBufferFromStaged(
-		vk::PhysicalDevice const * const physicalDevice,
-		VulkanDevice const * const device,
-		VulkanCommandPool const * const commandPool,
+		vk::PhysicalDevice const physicalDevice,
+		vk::Device const & device,
+		VulkanCommandPool const & commandPool,
 		void const * const srcData,
 		size_t bufferSize
 	) {
-		auto stagingBuffer = VulkanDeviceMakeFromStagingBuffer(
+		vk::Buffer stagingBuffer;
+		vk::DeviceMemory stagingBufferMemory;
+		std::tie(stagingBuffer, stagingBufferMemory) 
+		= VulkanDeviceMakeFromStagingBuffer::create(
 			physicalDevice,
 			device,
 			srcData,
@@ -1726,39 +1021,92 @@ public:
 			vk::MemoryPropertyFlagBits::eDeviceLocal
 		);
 		
-		commandPool->copyBuffer(
-			stagingBuffer(),
+		commandPool.copyBuffer(
+			stagingBuffer,
 			(*buffer)(),
 			bufferSize
 		);
-	
+
+		device.destroyBuffer(stagingBuffer);
+		device.freeMemory(stagingBufferMemory);
+
 		return buffer;
 	}
 };
 
-struct VulkanDeviceMemoryImage : public VulkanDeviceMemoryParent<VulkanImage> {
-	using Super = VulkanDeviceMemoryParent<VulkanImage>;
-	using Super::Super;
+namespace VulkanDeviceMemoryImage {
 
-public:
-	static std::unique_ptr<VulkanDeviceMemoryImage> makeTextureFromStaged(
-		vk::PhysicalDevice const * const physicalDevice,
-		VulkanDevice const * const device,
-		VulkanCommandPool const * const commandPool,
+	std::pair<vk::Image, vk::DeviceMemory>
+	createImage(
+		vk::PhysicalDevice const physicalDevice,
+		vk::Device const & device,
+		uint32_t width,
+		uint32_t height,
+		uint32_t mipLevels,
+		vk::SampleCountFlagBits numSamples,
+		vk::Format format,
+		vk::ImageTiling tiling,
+		vk::ImageUsageFlags usage,
+		vk::MemoryPropertyFlags properties
+	) {
+		// TODO this as a ctor that just calls Super
+		auto image = device.createImage(vk::ImageCreateInfo(VkImageCreateInfo{
+			.sType = (VkStructureType)vk::StructureType::eImageCreateInfo,
+			.imageType = (VkImageType)vk::ImageType::e2D,
+			.format = (VkFormat)format,
+			.extent = {
+				.width = width,
+				.height = height,
+				.depth = 1,
+			},
+			.mipLevels = mipLevels,
+			.arrayLayers = 1,
+			.samples = (VkSampleCountFlagBits)numSamples,
+			.tiling = (VkImageTiling)tiling,
+			.usage = (VkImageUsageFlags)usage,
+			.sharingMode = (VkSharingMode)vk::SharingMode::eExclusive,
+			.initialLayout = (VkImageLayout)vk::ImageLayout::eUndefined,
+		}));
+
+		auto memRequirements = device.getImageMemoryRequirements(image);
+		auto imageMemory = device.allocateMemory(vk::MemoryAllocateInfo(VkMemoryAllocateInfo{
+			.sType = (VkStructureType)vk::StructureType::eMemoryAllocateInfo,
+			.allocationSize = memRequirements.size,
+			.memoryTypeIndex = ThisVulkanPhysicalDevice::findMemoryType(
+				physicalDevice,
+				memRequirements.memoryTypeBits,
+				properties
+			),
+		}));
+		device.bindImageMemory(image, imageMemory, 0);
+		return std::make_pair(image, imageMemory);
+	}
+
+	std::pair<vk::Image, vk::DeviceMemory>
+	makeTextureFromStaged(
+		vk::PhysicalDevice physicalDevice,
+		vk::Device device,
+		VulkanCommandPool const & commandPool,
 		void const * const srcData,
 		size_t bufferSize,
 		int texWidth,
 		int texHeight,
 		uint32_t mipLevels
 	) {
-		auto stagingBuffer = VulkanDeviceMakeFromStagingBuffer(
+		vk::Buffer stagingBuffer;
+		vk::DeviceMemory stagingBufferMemory;
+		std::tie(stagingBuffer, stagingBufferMemory) 
+		= VulkanDeviceMakeFromStagingBuffer::create(
 			physicalDevice,
 			device,
 			srcData,
 			bufferSize
 		);
 		
-		auto image = createImage(
+		vk::Image image;
+		vk::DeviceMemory imageMemory;
+		std::tie(image, imageMemory) 
+		= createImage(
 			physicalDevice,
 			device,
 			texWidth,
@@ -1773,126 +1121,85 @@ public:
 			vk::MemoryPropertyFlagBits::eDeviceLocal
 		);
 
-		commandPool->transitionImageLayout(
-			(*image)(),
+		commandPool.transitionImageLayout(
+			image,
 			vk::ImageLayout::eUndefined,
 			vk::ImageLayout::eTransferDstOptimal,
 			mipLevels
 		);
-		commandPool->copyBufferToImage(
-			stagingBuffer(),
-			(*image)(),
+		commandPool.copyBufferToImage(
+			stagingBuffer,
+			image,
 			(uint32_t)texWidth,
 			(uint32_t)texHeight
 		);
 		/*
-		commandPool->transitionImageLayout(
-			(*image)(),
+		commandPool.transitionImageLayout(
+			image,
 			vk::ImageLayout::eTransferDstOptimal,
 			vk::ImageLayout::eShaderReadOnlyOptimal,
 			mipLevels
 		);
 		*/
 		
-		return image;
-	}
-
-public:
-	static std::unique_ptr<VulkanDeviceMemoryImage> createImage(
-		vk::PhysicalDevice const * const physicalDevice,
-		VulkanDevice const * const device,
-		uint32_t width,
-		uint32_t height,
-		uint32_t mipLevels,
-		vk::SampleCountFlagBits numSamples,
-		vk::Format format,
-		vk::ImageTiling tiling,
-		vk::ImageUsageFlags usage,
-		vk::MemoryPropertyFlags properties
-	) {
-		// TODO this as a ctor that just calls Super
-		VulkanImage image(
-			device,
-			VkImageCreateInfo{
-				.sType = (VkStructureType)vk::StructureType::eImageCreateInfo,
-				.imageType = (VkImageType)vk::ImageType::e2D,
-				.format = (VkFormat)format,
-				.extent = {
-					.width = width,
-					.height = height,
-					.depth = 1,
-				},
-				.mipLevels = mipLevels,
-				.arrayLayers = 1,
-				.samples = (VkSampleCountFlagBits)numSamples,
-				.tiling = (VkImageTiling)tiling,
-				.usage = (VkImageUsageFlags)usage,
-				.sharingMode = (VkSharingMode)vk::SharingMode::eExclusive,
-				.initialLayout = (VkImageLayout)vk::ImageLayout::eUndefined,
-			}
-		);
-
-		auto memRequirements = image.getMemoryRequirements();
-		auto imageMemory = VulkanDeviceMemory(device, VkMemoryAllocateInfo{
-			.sType = (VkStructureType)vk::StructureType::eMemoryAllocateInfo,
-			.allocationSize = memRequirements.size,
-			.memoryTypeIndex = ThisVulkanPhysicalDevice::findMemoryType(
-				*physicalDevice,
-				memRequirements.memoryTypeBits,
-				properties
-			),
-		});
-
-		image.bindMemory(imageMemory());
+		device.destroyBuffer(stagingBuffer);
+		device.freeMemory(stagingBufferMemory);
 		
-		auto result = std::make_unique<VulkanDeviceMemoryImage>(image(), imageMemory(), device);
-		// TODO move or something?
-		image.release();
-		imageMemory.release();
-		return result;
+		return std::make_pair(image, imageMemory);
 	}
+
 };
 
-struct VulkanSwapChain : public VulkanHandle<VkSwapchainKHR> {
+struct VulkanSwapChain {
 protected:
+	vk::SwapchainKHR obj;
 	//owned
 	vk::RenderPass renderPass;
 	// hold for this class lifespan
-	VulkanDevice const * const device = {};
+	vk::Device device;
 
-	std::unique_ptr<VulkanDeviceMemoryImage> depthImage;
-	std::unique_ptr<VulkanImageView> depthImageView;
+	vk::Image depthImage;
+	vk::DeviceMemory depthImageMemory;
+	vk::ImageView depthImageView;
 	
-	std::unique_ptr<VulkanDeviceMemoryImage> colorImage;
-	std::unique_ptr<VulkanImageView> colorImageView;
+	vk::Image colorImage;
+	vk::DeviceMemory colorImageMemory;
+	vk::ImageView colorImageView;
 public:
 	VkExtent2D extent = {};
 	
 	// I would combine these into one struct so they can be dtored together
 	// but it seems vulkan wants VkImages linear for its getter?
-	std::vector<VkImage> images;
-	std::vector<std::unique_ptr<VulkanImageView>> imageViews;
-	std::vector<VkFramebuffer> framebuffers;
+	std::vector<vk::Image> images;
+	std::vector<vk::ImageView> imageViews;
+	std::vector<vk::Framebuffer> framebuffers;
 	
 public:
+	auto operator()() const { return (VkSwapchainKHR)obj; }
 	auto const & getRenderPass() const { return renderPass; }
 
 	~VulkanSwapChain() {
-		depthImageView = {};
-		depthImage = {};
-		colorImageView = {};
-		colorImage = {};
+		device.destroyImageView(depthImageView);
+		device.freeMemory(depthImageMemory);
+		device.destroyImage(depthImage);
 		
-		for (auto framebuffer : framebuffers) {
-			vkDestroyFramebuffer((*device)(), framebuffer, getAllocator());
+		device.destroyImageView(colorImageView);
+		device.freeMemory(colorImageMemory);
+		device.destroyImage(colorImage);
+		
+		for (auto & framebuffer : framebuffers) {
+			device.destroyFramebuffer(framebuffer);
+		}
+		for (auto & imageView : imageViews) {
+			device.destroyImageView(imageView);
 		}
 		imageViews.clear();
-		if (handle) vkDestroySwapchainKHR((*device)(), handle, getAllocator());
+		device.destroySwapchainKHR(obj);
 	}
 
 	// should this be a 'devices' or a 'swapchain' method?
-	std::vector<VkImage> getImages() const {
-		return vulkanEnum<VkImage>(NAME_PAIR(vkGetSwapchainImagesKHR), (*device)(), (*this)());
+	auto getImages() const {
+		return device.getSwapchainImagesKHR(obj);
 	}
 	
 	// ************** from here on down, app-specific **************
@@ -1900,12 +1207,12 @@ public:
 
 	VulkanSwapChain(
 		Tensor::int2 screenSize,
-		vk::PhysicalDevice const * const physicalDevice,
-		VulkanDevice const * const device_,
-		vk::SurfaceKHR const * const surface,
+		vk::PhysicalDevice physicalDevice,
+		vk::Device device_,
+		vk::SurfaceKHR surface,
 		vk::SampleCountFlagBits msaaSamples
 	) : device(device_) {
-		auto swapChainSupport = ThisVulkanPhysicalDevice::querySwapChainSupport(*physicalDevice, *surface);
+		auto swapChainSupport = ThisVulkanPhysicalDevice::querySwapChainSupport(physicalDevice, surface);
 		auto surfaceFormat = chooseSwapSurfaceFormat(swapChainSupport.formats);
 		auto presentMode = chooseSwapPresentMode(swapChainSupport.presentModes);
 		extent = chooseSwapExtent(screenSize, swapChainSupport.capabilities);
@@ -1919,7 +1226,7 @@ public:
 
 		auto createInfo = VkSwapchainCreateInfoKHR{
 			.sType = (VkStructureType)vk::StructureType::eSwapchainCreateInfoKHR,
-			.surface = *surface,
+			.surface = surface,
 			.minImageCount = imageCount,
 			.imageFormat = (VkFormat)surfaceFormat.format,
 			.imageColorSpace = (VkColorSpaceKHR)surfaceFormat.colorSpace,
@@ -1931,7 +1238,7 @@ public:
 			.presentMode = (VkPresentModeKHR)presentMode,
 			.clipped = VK_TRUE,
 		};
-		auto indices = ThisVulkanPhysicalDevice::findQueueFamilies(*physicalDevice, *surface);
+		auto indices = ThisVulkanPhysicalDevice::findQueueFamilies(physicalDevice, surface);
 		auto queueFamilyIndices = Common::make_array<uint32_t>(
 			(uint32_t)indices.graphicsFamily.value(),
 			(uint32_t)indices.presentFamily.value()
@@ -1943,7 +1250,7 @@ public:
 		} else {
 			createInfo.imageSharingMode = (VkSharingMode)vk::SharingMode::eExclusive;
 		}
-		handle = device_->createSwapchain(&createInfo);
+		obj = device.createSwapchainKHR(createInfo);
 
 		images = getImages();
 		for (size_t i = 0; i < images.size(); i++) {
@@ -1957,14 +1264,16 @@ public:
 	
 		renderPass = ThisVulkanRenderPass::create(
 			physicalDevice,
-			device_,
+			device,
 			surfaceFormat.format,
 			msaaSamples
 		);
 		
 		//createColorResources
 		auto colorFormat = surfaceFormat.format;
-		colorImage = VulkanDeviceMemoryImage::createImage(
+		
+		std::tie(colorImage, colorImageMemory) 
+		= VulkanDeviceMemoryImage::createImage(
 			physicalDevice,
 			device,
 			extent.width,
@@ -1977,15 +1286,16 @@ public:
 			vk::MemoryPropertyFlagBits::eDeviceLocal
 		);
 		colorImageView = createImageView(
-			(*colorImage)(),
+			colorImage,
 			colorFormat,
 			vk::ImageAspectFlagBits::eColor,
 			1
 		);
 		
 		//createDepthResources
-		auto depthFormat = ThisVulkanPhysicalDevice::findDepthFormat(*physicalDevice);
-		depthImage = VulkanDeviceMemoryImage::createImage(
+		auto depthFormat = ThisVulkanPhysicalDevice::findDepthFormat(physicalDevice);
+		std::tie(depthImage, depthImageMemory) 
+		= VulkanDeviceMemoryImage::createImage(
 			physicalDevice,
 			device,
 			extent.width,
@@ -1998,7 +1308,7 @@ public:
 			vk::MemoryPropertyFlagBits::eDeviceLocal
 		);
 		depthImageView = createImageView(
-			(*depthImage)(),
+			depthImage,
 			depthFormat,
 			vk::ImageAspectFlagBits::eDepth,
 			1
@@ -2008,11 +1318,11 @@ public:
 		framebuffers.resize(imageViews.size());
 		for (size_t i = 0; i < imageViews.size(); i++) {
 			auto attachments = Common::make_array(
-				(*colorImageView)(),
-				(*depthImageView)(),
-				(*imageViews[i])()
+				(VkImageView)colorImageView,
+				(VkImageView)depthImageView,
+				(VkImageView)imageViews[i]
 			);
-			auto framebufferInfo = VkFramebufferCreateInfo{
+			framebuffers[i] = device.createFramebuffer(vk::FramebufferCreateInfo(VkFramebufferCreateInfo{
 				.sType = (VkStructureType)vk::StructureType::eFramebufferCreateInfo,
 				.renderPass = renderPass,
 				.attachmentCount = (uint32_t)attachments.size(),
@@ -2020,34 +1330,30 @@ public:
 				.width = extent.width,
 				.height = extent.height,
 				.layers = 1,
-			};
-			framebuffers[i] = device_->createFramebuffer(&framebufferInfo);
+			}));
 		}
 	}
 
 public:
-	std::unique_ptr<VulkanImageView> createImageView(
-		VkImage image,
+	vk::ImageView createImageView(
+		vk::Image image,
 		vk::Format format,
 		vk::ImageAspectFlags aspectFlags,
 		uint32_t mipLevels
 	) {
-		return std::make_unique<VulkanImageView>(
-			device,
-			VkImageViewCreateInfo{
-				.sType = (VkStructureType)vk::StructureType::eImageViewCreateInfo,
-				.image = image,
-				.viewType = (VkImageViewType)vk::ImageViewType::e2D,
-				.format = (VkFormat)format,
-				.subresourceRange = {
-					.aspectMask = (VkImageAspectFlags)aspectFlags,
-					.baseMipLevel = 0,
-					.levelCount = mipLevels,
-					.baseArrayLayer = 0,
-					.layerCount = 1,
-				},
-			}
-		);
+		return device.createImageView(vk::ImageViewCreateInfo(VkImageViewCreateInfo{
+			.sType = (VkStructureType)vk::StructureType::eImageViewCreateInfo,
+			.image = image,
+			.viewType = (VkImageViewType)vk::ImageViewType::e2D,
+			.format = (VkFormat)format,
+			.subresourceRange = {
+				.aspectMask = (VkImageAspectFlags)aspectFlags,
+				.baseMipLevel = 0,
+				.levelCount = mipLevels,
+				.baseArrayLayer = 0,
+				.layerCount = 1,
+			},
+		}));
 	}
 
 protected:
@@ -2094,20 +1400,20 @@ protected:
 };
 
 //only used by VulkanGraphicsPipeline
-struct VulkanDescriptorSetLayout : public VulkanHandle<VkDescriptorSetLayout> {
-	using Super = VulkanHandle<VkDescriptorSetLayout>;
+struct VulkanDescriptorSetLayout {
 protected:
+	vk::DescriptorSetLayout obj;
 	//held for dtor
-	VulkanDevice const * const device = {};
+	vk::Device const device;
 public:
+	auto operator()() const { return (VkDescriptorSetLayout)obj; }
+
 	~VulkanDescriptorSetLayout() {
-		if (handle) {
-			vkDestroyDescriptorSetLayout((*device)(), handle, getAllocator());
-		}
+		device.destroyDescriptorSetLayout(obj);
 	}
 	
 	VulkanDescriptorSetLayout(
-		VulkanDevice const * const device_
+		vk::Device const device_
 	) : device(device_) {
 		auto bindings = Common::make_array(
 			VkDescriptorSetLayoutBinding{	//uboLayoutBinding
@@ -2123,27 +1429,29 @@ public:
 				.stageFlags = (VkShaderStageFlags)vk::ShaderStageFlagBits::eFragment,
 			}
 		);
-		auto layoutInfo = VkDescriptorSetLayoutCreateInfo{
+		obj = device.createDescriptorSetLayout(vk::DescriptorSetLayoutCreateInfo(VkDescriptorSetLayoutCreateInfo{
 			.sType = (VkStructureType)vk::StructureType::eDescriptorSetLayoutCreateInfo,
 			.bindingCount = (uint32_t)bindings.size(),
 			.pBindings = bindings.data(),
-		};
-		handle = device_->createDescriptorSetLayout(&layoutInfo);
+		}));
 	}
 };
 
-struct VulkanDescriptorPool : public VulkanHandle<VkDescriptorPool> {
-	using Super = VulkanHandle<VkDescriptorPool>;
+// only wrapping crete/destroy so ... raii?
+struct VulkanDescriptorPool {
 protected:
+	vk::DescriptorPool obj;
 	//held for dtor
-	VulkanDevice const * const device = {};
+	vk::Device const device;
 public:
+	auto operator()() const { return (VkDescriptorPool)obj; }
+
 	~VulkanDescriptorPool() {
-		if (handle) vkDestroyDescriptorPool((*device)(), handle, getAllocator());
+		device.destroyDescriptorPool(obj);
 	}
 
 	VulkanDescriptorPool(
-		VulkanDevice const * const device_,
+		vk::Device const device_,
 		uint32_t const maxFramesInFlight
 	) : device(device_) {
 		auto poolSizes = Common::make_array(
@@ -2156,71 +1464,74 @@ public:
 				.descriptorCount = maxFramesInFlight,
 			}
 		);
-		auto poolInfo = VkDescriptorPoolCreateInfo{
+		obj = device.createDescriptorPool(vk::DescriptorPoolCreateInfo(VkDescriptorPoolCreateInfo{
 			.sType = (VkStructureType)vk::StructureType::eDescriptorPoolCreateInfo,
 			.maxSets = maxFramesInFlight,
 			.poolSizeCount = (uint32_t)poolSizes.size(),
 			.pPoolSizes = poolSizes.data(),
-		};
-		VULKAN_SAFE(vkCreateDescriptorPool, (*device)(), &poolInfo, getAllocator(), &handle);
+		}));
 	}
 };
 
 //only used by VulkanGraphicsPipeline's ctor
-struct VulkanShaderModule : public VulkanHandle<VkShaderModule> {
+struct VulkanShaderModule {
 protected:
+	vk::ShaderModule obj;
 	//held:
-	VulkanDevice const * const device = {};
+	vk::Device const device;
 public:
+	auto operator()() const { return (VkShaderModule)obj; }
+
 	~VulkanShaderModule() {
-		if (handle) vkDestroyShaderModule((*device)(), handle, getAllocator());
+		device.destroyShaderModule(obj);
 	}
 	
 	VulkanShaderModule(
-		VulkanDevice const * const device_,
+		vk::Device const device_,
 		std::string const code
 	) : device(device_) {
-		auto createInfo = VkShaderModuleCreateInfo{
+		obj = device.createShaderModule(vk::ShaderModuleCreateInfo(VkShaderModuleCreateInfo{
 			.sType = (VkStructureType)vk::StructureType::eShaderModuleCreateInfo,
 			.codeSize = code.length(),
 			.pCode = reinterpret_cast<uint32_t const *>(code.data()),
-		};
-		handle = device_->createShaderModule(&createInfo);
+		}));
 	}
 };
 
-struct VulkanGraphicsPipeline : public VulkanHandle<VkPipeline> {
+struct VulkanGraphicsPipeline  {
 protected:
+	vk::Pipeline obj;
 	//owned:
-	VkPipelineLayout pipelineLayout = {};
+	vk::PipelineLayout pipelineLayout;
 	std::unique_ptr<VulkanDescriptorSetLayout> descriptorSetLayout;
 	
 	//held:
-	VulkanDevice const * const device = {};				//held for dtor
+	vk::Device const device;				//held for dtor
 public:
-	VkPipelineLayout getPipelineLayout() const { return ASSERTHANDLE(pipelineLayout); }
+	auto operator()() const { return (VkPipeline)obj; }
+	auto const & getPipelineLayout() const { return pipelineLayout; }
 	
 	VulkanDescriptorSetLayout * getDescriptorSetLayout() { return descriptorSetLayout.get(); }
 	VulkanDescriptorSetLayout const * getDescriptorSetLayout() const { return descriptorSetLayout.get(); }
 
 	~VulkanGraphicsPipeline() {
-		if (pipelineLayout) vkDestroyPipelineLayout((*device)(), pipelineLayout, getAllocator());
-		if (handle) vkDestroyPipeline((*device)(), handle, getAllocator());
+		device.destroyPipelineLayout(pipelineLayout);
+		device.destroyPipeline(obj);
 		descriptorSetLayout = nullptr;
 	}
 
 	VulkanGraphicsPipeline(
-		vk::PhysicalDevice const * const physicalDevice,
-		VulkanDevice const * const device_,
-		vk::RenderPass const & renderPass,
+		vk::PhysicalDevice const physicalDevice,
+		vk::Device const device_,
+		vk::RenderPass const renderPass,
 		vk::SampleCountFlagBits msaaSamples
 	) : device(device_) {
 		
 		// descriptorSetLayout is only used by graphicsPipeline
-		descriptorSetLayout = std::make_unique<VulkanDescriptorSetLayout>(device_);
+		descriptorSetLayout = std::make_unique<VulkanDescriptorSetLayout>(device);
 
 		auto vertShaderModule = VulkanShaderModule(
-			device_,
+			device,
 			Common::File::read("shader-vert.spv")
 		);
 		auto vertShaderStageInfo = VkPipelineShaderStageCreateInfo{
@@ -2232,7 +1543,7 @@ public:
 		};
 		
 		auto fragShaderModule = VulkanShaderModule(
-			device_,
+			device,
 			Common::File::read("shader-frag.spv")
 		);
 		auto fragShaderStageInfo = VkPipelineShaderStageCreateInfo{
@@ -2326,40 +1637,39 @@ public:
 		auto descriptorSetLayouts = Common::make_array<VkDescriptorSetLayout>(
 			(*descriptorSetLayout)()
 		);
-		auto pipelineLayoutInfo = VkPipelineLayoutCreateInfo{
+		pipelineLayout = device.createPipelineLayout(vk::PipelineLayoutCreateInfo(VkPipelineLayoutCreateInfo{
 			.sType = (VkStructureType)vk::StructureType::ePipelineLayoutCreateInfo,
 			.setLayoutCount = (uint32_t)descriptorSetLayouts.size(),
 			.pSetLayouts = descriptorSetLayouts.data(),
-		};
-		pipelineLayout = device_->createPipelineLayout(&pipelineLayoutInfo);
+		}));
 
 		auto shaderStages = Common::make_array(
 			vertShaderStageInfo,
 			fragShaderStageInfo
 		);
-		auto pipelineInfo = VkGraphicsPipelineCreateInfo{
-			.sType = (VkStructureType)vk::StructureType::eGraphicsPipelineCreateInfo,
-			.stageCount = (uint32_t)shaderStages.size(),
-			.pStages = shaderStages.data(),
-			.pVertexInputState = &vertexInputInfo,
-			.pInputAssemblyState = &inputAssembly,
-			.pViewportState = &viewportState,
-			.pRasterizationState = &rasterizer,
-			.pMultisampleState = &multisampling,
-			.pDepthStencilState = &depthStencil,
-			.pColorBlendState = &colorBlending,
-			.pDynamicState = &dynamicState,
-			.layout = pipelineLayout,
-			.renderPass = renderPass,
-			.subpass = 0,
-			.basePipelineHandle = VK_NULL_HANDLE,
-		};
-		handle = device_->createGraphicsPipelines(
-			(VkPipelineCache)VK_NULL_HANDLE,
-			1,
-			&pipelineInfo,
-			getAllocator()
+		auto infos = Common::make_array(
+			vk::GraphicsPipelineCreateInfo(VkGraphicsPipelineCreateInfo{
+				.sType = (VkStructureType)vk::StructureType::eGraphicsPipelineCreateInfo,
+				.stageCount = (uint32_t)shaderStages.size(),
+				.pStages = shaderStages.data(),
+				.pVertexInputState = &vertexInputInfo,
+				.pInputAssemblyState = &inputAssembly,
+				.pViewportState = &viewportState,
+				.pRasterizationState = &rasterizer,
+				.pMultisampleState = &multisampling,
+				.pDepthStencilState = &depthStencil,
+				.pColorBlendState = &colorBlending,
+				.pDynamicState = &dynamicState,
+				.layout = pipelineLayout,
+				.renderPass = renderPass,
+				.subpass = 0,
+				.basePipelineHandle = VK_NULL_HANDLE,
+			})
 		);
+		obj = device.createGraphicsPipelines(
+			vk::PipelineCache{},
+			infos 
+		).value[0];
 	}
 };
 
@@ -2389,10 +1699,11 @@ protected:
 	std::unique_ptr<VulkanDeviceMemoryBuffer> indexBuffer;
 	
 	uint32_t mipLevels = {};
-	std::unique_ptr<VulkanDeviceMemoryImage> textureImage;
 
-	std::unique_ptr<VulkanImageView> textureImageView;
-	std::unique_ptr<VulkanSampler> textureSampler;
+	vk::Image textureImage;
+	vk::DeviceMemory textureImageMemory;
+	vk::ImageView textureImageView;
+	vk::Sampler textureSampler;
 	
 	std::vector<Vertex> vertices;
 	std::vector<uint32_t> indices;
@@ -2404,11 +1715,11 @@ protected:
 	std::unique_ptr<VulkanDescriptorPool> descriptorPool;
 	
 	// each of these, there are one per number of frames in flight
-	std::vector<VkDescriptorSet> descriptorSets;
-	std::vector<VkCommandBuffer> commandBuffers;
-	std::vector<VkSemaphore> imageAvailableSemaphores;
-	std::vector<VkSemaphore> renderFinishedSemaphores;
-	std::vector<VkFence> inFlightFences;
+	std::vector<vk::DescriptorSet> descriptorSets;
+	std::vector<vk::CommandBuffer> commandBuffers;
+	std::vector<vk::Semaphore> imageAvailableSemaphores;
+	std::vector<vk::Semaphore> renderFinishedSemaphores;
+	std::vector<vk::Fence> inFlightFences;
 	
 	uint32_t currentFrame = {};
 	
@@ -2457,21 +1768,21 @@ public:
 		);
 		msaaSamples = ThisVulkanPhysicalDevice::getMaxUsableSampleCount(physicalDevice);
 		device = std::make_unique<VulkanDevice>(
-			&physicalDevice,
-			&surface,
+			physicalDevice,
+			surface,
 			deviceExtensions,
 			enableValidationLayers
 		);
 		swapChain = std::make_unique<VulkanSwapChain>(
 			app->getScreenSize(),
-			&physicalDevice,
-			device.get(),
-			&surface,
+			physicalDevice,
+			device->obj,
+			surface,
 			msaaSamples
 		);
 		graphicsPipeline = std::make_unique<VulkanGraphicsPipeline>(
-			&physicalDevice,
-			device.get(),
+			physicalDevice,
+			device->obj,
 			swapChain->getRenderPass(),
 			msaaSamples
 		);
@@ -2479,7 +1790,7 @@ public:
 		{
 			auto queueFamilyIndices = ThisVulkanPhysicalDevice::findQueueFamilies(physicalDevice, surface);
 			commandPool = std::make_unique<VulkanCommandPool>(
-				device.get(),
+				*device,
 				VkCommandPoolCreateInfo{
 					.sType = (VkStructureType)vk::StructureType::eCommandPoolCreateInfo,
 					.flags = (VkCommandPoolCreateFlags)vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
@@ -2491,48 +1802,49 @@ public:
 		createTextureImage();
 	   
 		textureImageView = swapChain->createImageView(
-			(*textureImage)(),
+			textureImage,
 			vk::Format::eR8G8B8A8Srgb,
 			vk::ImageAspectFlagBits::eColor,
 			mipLevels
 		);
 
-		textureSampler = std::make_unique<VulkanSampler>(
-			device.get(),
-			VkSamplerCreateInfo{
-				.sType = (VkStructureType)vk::StructureType::eSamplerCreateInfo,
-				.magFilter = (VkFilter)vk::Filter::eLinear,
-				.minFilter = (VkFilter)vk::Filter::eLinear,
-				.mipmapMode = (VkSamplerMipmapMode)vk::SamplerMipmapMode::eLinear,
-				.addressModeU = (VkSamplerAddressMode)vk::SamplerAddressMode::eRepeat,
-				.addressModeV = (VkSamplerAddressMode)vk::SamplerAddressMode::eRepeat,
-				.addressModeW = (VkSamplerAddressMode)vk::SamplerAddressMode::eRepeat,
-				.mipLodBias = 0,
-				.anisotropyEnable = VK_TRUE,
-				.maxAnisotropy = physicalDevice.getProperties().limits.maxSamplerAnisotropy,
-				.compareEnable = VK_FALSE,
-				.compareOp = (VkCompareOp)vk::CompareOp::eAlways,
-				.minLod = 0,
-				.maxLod = static_cast<float>(mipLevels),
-				.borderColor = (VkBorderColor)vk::BorderColor::eIntOpaqueBlack,
-				.unnormalizedCoordinates = VK_FALSE,
-			}
+		textureSampler = device->obj.createSampler(
+			vk::SamplerCreateInfo(
+				VkSamplerCreateInfo{
+					.sType = (VkStructureType)vk::StructureType::eSamplerCreateInfo,
+					.magFilter = (VkFilter)vk::Filter::eLinear,
+					.minFilter = (VkFilter)vk::Filter::eLinear,
+					.mipmapMode = (VkSamplerMipmapMode)vk::SamplerMipmapMode::eLinear,
+					.addressModeU = (VkSamplerAddressMode)vk::SamplerAddressMode::eRepeat,
+					.addressModeV = (VkSamplerAddressMode)vk::SamplerAddressMode::eRepeat,
+					.addressModeW = (VkSamplerAddressMode)vk::SamplerAddressMode::eRepeat,
+					.mipLodBias = 0,
+					.anisotropyEnable = VK_TRUE,
+					.maxAnisotropy = physicalDevice.getProperties().limits.maxSamplerAnisotropy,
+					.compareEnable = VK_FALSE,
+					.compareOp = (VkCompareOp)vk::CompareOp::eAlways,
+					.minLod = 0,
+					.maxLod = static_cast<float>(mipLevels),
+					.borderColor = (VkBorderColor)vk::BorderColor::eIntOpaqueBlack,
+					.unnormalizedCoordinates = VK_FALSE,
+				}
+			)
 		);
 
 		loadModel();
 		
 		vertexBuffer = VulkanDeviceMemoryBuffer::makeBufferFromStaged(
-			&physicalDevice,
-			device.get(),
-			commandPool.get(),
+			physicalDevice,
+			device->obj,
+			*commandPool.get(),
 			vertices.data(),
 			sizeof(vertices[0]) * vertices.size()
 		);
 
 		indexBuffer = VulkanDeviceMemoryBuffer::makeBufferFromStaged(
-			&physicalDevice,
-			device.get(),
-			commandPool.get(),
+			physicalDevice,
+			device->obj,
+			*commandPool.get(),
 			indices.data(),
 			sizeof(indices[0]) * indices.size()
 		);
@@ -2540,16 +1852,16 @@ public:
 		uniformBuffersMapped.resize(maxFramesInFlight);
 		for (size_t i = 0; i < maxFramesInFlight; i++) {
 			uniformBuffers.push_back(std::make_unique<VulkanDeviceMemoryBuffer>(
-				&physicalDevice,
-				device.get(),
+				physicalDevice,
+				device->obj,
 				sizeof(UniformBufferObject),
 				vk::BufferUsageFlagBits::eUniformBuffer,
 				vk::MemoryPropertyFlagBits::eHostVisible
 				| vk::MemoryPropertyFlagBits::eHostCoherent
 			));
 			vkMapMemory(
-				(*device)(),
-				uniformBuffers[i]->getMemory()(),
+				device->obj,
+				uniformBuffers[i]->getMemory(),
 				0,
 				sizeof(UniformBufferObject),
 				0,
@@ -2558,7 +1870,7 @@ public:
 		}
 
 		descriptorPool = std::make_unique<VulkanDescriptorPool>(
-			device.get(),
+			device->obj,
 			(uint32_t)maxFramesInFlight
 		);
 		
@@ -2592,10 +1904,17 @@ protected:
 
 public:
 	~VulkanCommon() {
+		vertexBuffer = {};
+		indexBuffer = {};
+		uniformBuffers.clear();
+		device->obj.destroySampler(textureSampler);
+		device->obj.destroyImageView(textureImageView);
+		device->obj.freeMemory(textureImageMemory);
+		device->obj.destroyImage(textureImage);
 		for (size_t i = 0; i < maxFramesInFlight; i++) {
-			vkDestroySemaphore((*device)(), renderFinishedSemaphores[i], nullptr);
-			vkDestroySemaphore((*device)(), imageAvailableSemaphores[i], nullptr);
-			vkDestroyFence((*device)(), inFlightFences[i], nullptr);
+			device->obj.destroySemaphore(renderFinishedSemaphores[i]);
+			device->obj.destroySemaphore(imageAvailableSemaphores[i]);
+			device->obj.destroyFence(inFlightFences[i]);
 		}
 	}
 
@@ -2630,10 +1949,11 @@ protected:
 		VkDeviceSize const bufferSize = texSize.x * texSize.y * texBPP;
 		mipLevels = (uint32_t)std::floor(std::log2(std::max(texSize.x, texSize.y))) + 1;
 	
-		textureImage = VulkanDeviceMemoryImage::makeTextureFromStaged(
-			&physicalDevice,
-			device.get(),
-			commandPool.get(),
+		std::tie(textureImage, textureImageMemory) 
+		= VulkanDeviceMemoryImage::makeTextureFromStaged(
+			physicalDevice,
+			device->obj,
+			*commandPool.get(),
 			srcData,
 			bufferSize,
 			texSize.x,
@@ -2642,7 +1962,7 @@ protected:
 		);
 	
 		generateMipmaps(
-			(*textureImage)(),
+			textureImage,
 			vk::Format::eR8G8B8A8Srgb,
 			texSize.x,
 			texSize.y,
@@ -2651,7 +1971,7 @@ protected:
 	}
 
 	void generateMipmaps(
-		VkImage image,
+		vk::Image image,
 		vk::Format imageFormat,
 		int32_t texWidth,
 		int32_t texHeight,
@@ -2664,41 +1984,45 @@ protected:
 			throw Common::Exception() << "texture image format does not support linear blitting!";
 		}
 
-		VulkanSingleTimeCommand commandBuffer(device.get(), (*commandPool)());
+		VulkanSingleTimeCommand commandBuffer(
+			device->obj,
+			device->graphicsQueue,
+			(*commandPool)()
+		);
 
-		auto barrier = VkImageMemoryBarrier{
+		auto barrier = vk::ImageMemoryBarrier(VkImageMemoryBarrier{
 			.sType = (VkStructureType)vk::StructureType::eImageMemoryBarrier,
 			.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
 			.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-			.image = image,
+			.image = (VkImage)image,
 			.subresourceRange = {
 				.aspectMask = (VkImageAspectFlags)vk::ImageAspectFlagBits::eColor,
 				.levelCount = 1,
 				.baseArrayLayer = 0,
 				.layerCount = 1,
 			},
-		};
+		});
 		
 		int32_t mipWidth = texWidth;
 		int32_t mipHeight = texHeight;
 
 		for (uint32_t i = 1; i < mipLevels; i++) {
 			barrier.subresourceRange.baseMipLevel = i - 1;
-			barrier.oldLayout = (VkImageLayout)vk::ImageLayout::eTransferDstOptimal;
-			barrier.newLayout = (VkImageLayout)vk::ImageLayout::eTransferSrcOptimal;
-			barrier.srcAccessMask = (VkAccessFlags)vk::AccessFlagBits::eTransferWrite;
-			barrier.dstAccessMask = (VkAccessFlags)vk::AccessFlagBits::eTransferRead;
+			barrier.oldLayout = vk::ImageLayout::eTransferDstOptimal;
+			barrier.newLayout = vk::ImageLayout::eTransferSrcOptimal;
+			barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+			barrier.dstAccessMask = vk::AccessFlagBits::eTransferRead;
 
-			commandBuffer.pipelineBarrier(
+			commandBuffer.cmd.pipelineBarrier(
 				vk::PipelineStageFlagBits::eTransfer,
 				vk::PipelineStageFlagBits::eTransfer,
-				{},
+				vk::DependencyFlags{},
 				{},
 				{},
 				barrier
 			);
 
-			auto blit = VkImageBlit{
+			auto blit = vk::ImageBlit(VkImageBlit{
 				.srcSubresource = {
 					.aspectMask = (VkImageAspectFlags)vk::ImageAspectFlagBits::eColor,
 					.mipLevel = i - 1,
@@ -2723,9 +2047,9 @@ protected:
 						1,
 					},
 				},
-			};
+			});
 			
-			commandBuffer.blitImage(
+			commandBuffer.cmd.blitImage(
 				image,
 				vk::ImageLayout::eTransferSrcOptimal,
 				image,
@@ -2734,12 +2058,12 @@ protected:
 				vk::Filter::eLinear
 			);
 
-			barrier.oldLayout = (VkImageLayout)vk::ImageLayout::eTransferSrcOptimal;
-			barrier.newLayout = (VkImageLayout)vk::ImageLayout::eShaderReadOnlyOptimal;
-			barrier.srcAccessMask = (VkAccessFlags)vk::AccessFlagBits::eTransferRead;
-			barrier.dstAccessMask = (VkAccessFlags)vk::AccessFlagBits::eShaderRead;
+			barrier.oldLayout = vk::ImageLayout::eTransferSrcOptimal;
+			barrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+			barrier.srcAccessMask = vk::AccessFlagBits::eTransferRead;
+			barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
 
-			commandBuffer.pipelineBarrier(
+			commandBuffer.cmd.pipelineBarrier(
 				vk::PipelineStageFlagBits::eTransfer,
 				vk::PipelineStageFlagBits::eFragmentShader,
 				{},
@@ -2753,15 +2077,15 @@ protected:
 		}
 
 		barrier.subresourceRange.baseMipLevel = mipLevels - 1;
-		barrier.oldLayout = (VkImageLayout)vk::ImageLayout::eTransferDstOptimal;
-		barrier.newLayout = (VkImageLayout)vk::ImageLayout::eShaderReadOnlyOptimal;
-		barrier.srcAccessMask = (VkAccessFlags)vk::AccessFlagBits::eTransferWrite;
-		barrier.dstAccessMask = (VkAccessFlags)vk::AccessFlagBits::eShaderRead;
+		barrier.oldLayout = vk::ImageLayout::eTransferDstOptimal;
+		barrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+		barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+		barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
 
-		commandBuffer.pipelineBarrier(
+		commandBuffer.cmd.pipelineBarrier(
 			vk::PipelineStageFlagBits::eTransfer,
 			vk::PipelineStageFlagBits::eFragmentShader,
-			(vk::DependencyFlags)0,
+			{},
 			{},
 			{},
 			barrier
@@ -2820,35 +2144,33 @@ protected:
 			throw Common::Exception() << "here";
 		}
 #endif
-		device->waitIdle();
+		device->obj.waitIdle();
 		swapChain = std::make_unique<VulkanSwapChain>(
 			app->getScreenSize(),
-			&physicalDevice,
-			device.get(),
-			&surface,
+			physicalDevice,
+			device->obj,
+			surface,
 			msaaSamples
 		);
 	}
 
 	void initCommandBuffers() {
-		commandBuffers.resize(maxFramesInFlight);
 		// TODO this matches 'VulkanSingleTimeCommand' ctor
-		auto allocInfo = VkCommandBufferAllocateInfo{
+		commandBuffers = device->obj.allocateCommandBuffers(vk::CommandBufferAllocateInfo(VkCommandBufferAllocateInfo{
 			.sType = (VkStructureType)vk::StructureType::eCommandBufferAllocateInfo,
 			.commandPool = (*commandPool)(),
 			.level = (VkCommandBufferLevel)vk::CommandBufferLevel::ePrimary,
-			.commandBufferCount = (uint32_t)commandBuffers.size(),
-		};
-		VULKAN_SAFE(vkAllocateCommandBuffers, (*device)(), &allocInfo, commandBuffers.data());
+			.commandBufferCount = (uint32_t)maxFramesInFlight,
+		}));
 		// end part that matches
 	}
 
 	void recordCommandBuffer(
-		VulkanCommandBuffer const * const commandBuffer,
+		vk::CommandBuffer const commandBuffer,
 		uint32_t imageIndex
 	) {
 		// TODO this part matches VulkanSingleTimeCommand ctor
-		commandBuffer->begin(VkCommandBufferBeginInfo{
+		commandBuffer.begin(VkCommandBufferBeginInfo{
 			.sType = (VkStructureType)vk::StructureType::eCommandBufferBeginInfo,
 		});
 		// end part that matches
@@ -2861,8 +2183,8 @@ protected:
 				.depthStencil = {1, 0},
 			}
 		);
-		commandBuffer->beginRenderPass(
-			VkRenderPassBeginInfo{
+		commandBuffer.beginRenderPass(
+			vk::RenderPassBeginInfo(VkRenderPassBeginInfo{
 				.sType = (VkStructureType)vk::StructureType::eRenderPassBeginInfo,
 				.renderPass = swapChain->getRenderPass(),
 				.framebuffer = swapChain->framebuffers[imageIndex],
@@ -2872,56 +2194,63 @@ protected:
 				},
 				.clearValueCount = (uint32_t)clearValues.size(),
 				.pClearValues = clearValues.data(),
-			},
-			(VkSubpassContents)vk::SubpassContents::eInline
+			}),
+			vk::SubpassContents::eInline
 		);
 
 		{
-			commandBuffer->bindPipeline(
-				(VkPipelineBindPoint)vk::PipelineBindPoint::eGraphics,
+			commandBuffer.bindPipeline(
+				vk::PipelineBindPoint::eGraphics,
 				(*graphicsPipeline)()
 			);
 
-			commandBuffer->setViewport(Common::make_array(
-				VkViewport{
-					.x = 0,
-					.y = 0,
-					.width = (float)swapChain->extent.width,
-					.height = (float)swapChain->extent.height,
-					.minDepth = 0,
-					.maxDepth = 1,
-				}
-			));
-
-			commandBuffer->setScissor(Common::make_array(
-				VkRect2D{
-					.offset = {0, 0},
-					.extent = swapChain->extent,
-				}
-			));
-
-			commandBuffer->bindVertexBuffers(
-				Common::make_array<VkBuffer>(
-					(*vertexBuffer)()
-				),
-				Common::make_array<VkDeviceSize>(0)
+			commandBuffer.setViewport(
+				0,
+				Common::make_array(
+					vk::Viewport(VkViewport{
+						.x = 0,
+						.y = 0,
+						.width = (float)swapChain->extent.width,
+						.height = (float)swapChain->extent.height,
+						.minDepth = 0,
+						.maxDepth = 1,
+					})
+				)
 			);
 
-			commandBuffer->bindIndexBuffer(
+			commandBuffer.setScissor(
+				0,
+				Common::make_array(
+					vk::Rect2D(VkRect2D{
+						.offset = {0, 0},
+						.extent = swapChain->extent,
+					})
+				)
+			);
+
+			commandBuffer.bindVertexBuffers(
+				0,
+				Common::make_array<vk::Buffer>(
+					(*vertexBuffer)()
+				),
+				Common::make_array<vk::DeviceSize>(0)
+			);
+
+			commandBuffer.bindIndexBuffer(
 				(*indexBuffer)(),
 				0,
 				vk::IndexType::eUint32
 			);
 
-			commandBuffer->bindDescriptorSets(
+			commandBuffer.bindDescriptorSets(
 				vk::PipelineBindPoint::eGraphics,
 				graphicsPipeline->getPipelineLayout(),
 				0,
 				descriptorSets[currentFrame],
-				0
+				{}
 			);
 
-			commandBuffer->drawIndexed(
+			commandBuffer.drawIndexed(
 				(uint32_t)indices.size(),
 				1,
 				0,
@@ -2930,8 +2259,8 @@ protected:
 			);
 		}
 
-		commandBuffer->endRenderPass();
-		commandBuffer->end();
+		commandBuffer.endRenderPass();
+		commandBuffer.end();
 	}
 
 	void initSyncObjects() {
@@ -2949,22 +2278,22 @@ protected:
 		};
 
 		for (size_t i = 0; i < maxFramesInFlight; i++) {
-			VULKAN_SAFE(vkCreateSemaphore, (*device)(), &semaphoreInfo, nullptr, &imageAvailableSemaphores[i]);
-			VULKAN_SAFE(vkCreateSemaphore, (*device)(), &semaphoreInfo, nullptr, &renderFinishedSemaphores[i]);
-			VULKAN_SAFE(vkCreateFence, (*device)(), &fenceInfo, nullptr, &inFlightFences[i]);
+			imageAvailableSemaphores[i] = device->obj.createSemaphore(semaphoreInfo);
+			renderFinishedSemaphores[i] = device->obj.createSemaphore(semaphoreInfo);
+			inFlightFences[i] = device->obj.createFence(fenceInfo);
 		}
 	}
 
 	void createDescriptorSets() {
 		std::vector<VkDescriptorSetLayout> layouts(maxFramesInFlight, (*graphicsPipeline->getDescriptorSetLayout())());
-		auto allocInfo = VkDescriptorSetAllocateInfo{
-			.sType = (VkStructureType)vk::StructureType::eDescriptorSetAllocateInfo,
-			.descriptorPool = (*descriptorPool)(),
-			.descriptorSetCount = (uint32_t)maxFramesInFlight,
-			.pSetLayouts = layouts.data(),
-		};
-		descriptorSets.resize(maxFramesInFlight);
-		VULKAN_SAFE(vkAllocateDescriptorSets, (*device)(), &allocInfo, descriptorSets.data());
+		descriptorSets = device->obj.allocateDescriptorSets(
+			vk::DescriptorSetAllocateInfo(VkDescriptorSetAllocateInfo{
+				.sType = (VkStructureType)vk::StructureType::eDescriptorSetAllocateInfo,
+				.descriptorPool = (*descriptorPool)(),
+				.descriptorSetCount = (uint32_t)maxFramesInFlight,
+				.pSetLayouts = layouts.data(),
+			})
+		);
 
 		for (size_t i = 0; i < maxFramesInFlight; i++) {
 			auto bufferInfo = VkDescriptorBufferInfo{
@@ -2973,34 +2302,31 @@ protected:
 				.range = sizeof(UniformBufferObject),
 			};
 			auto imageInfo = VkDescriptorImageInfo{
-				.sampler = (*textureSampler)(),
-				.imageView = (*textureImageView)(),
+				.sampler = textureSampler,
+				.imageView = textureImageView,
 				.imageLayout = (VkImageLayout)vk::ImageLayout::eShaderReadOnlyOptimal,
 			};
 			auto descriptorWrites = Common::make_array(
-				VkWriteDescriptorSet{
+				vk::WriteDescriptorSet(VkWriteDescriptorSet{
 					.sType = (VkStructureType)vk::StructureType::eWriteDescriptorSet,
 					.dstSet = descriptorSets[i],
 					.dstBinding = 0,
 					.descriptorCount = 1,
 					.descriptorType = (VkDescriptorType)vk::DescriptorType::eUniformBuffer,
 					.pBufferInfo = &bufferInfo,
-				},
-				VkWriteDescriptorSet{
+				}),
+				vk::WriteDescriptorSet(VkWriteDescriptorSet{
 					.sType = (VkStructureType)vk::StructureType::eWriteDescriptorSet,
 					.dstSet = descriptorSets[i],
 					.dstBinding = 1,
 					.descriptorCount = 1,
 					.descriptorType = (VkDescriptorType)vk::DescriptorType::eCombinedImageSampler,
 					.pImageInfo = &imageInfo,
-				}
+				})
 			);
-			vkUpdateDescriptorSets(
-				(*device)(),
-				(uint32_t)descriptorWrites.size(),
-				descriptorWrites.data(),
-				0,
-				nullptr
+			device->obj.updateDescriptorSets(
+				descriptorWrites,
+				{}
 			);
 		}
 	}
@@ -3082,48 +2408,54 @@ float[3][4][4] buf = {
 	}
 public:
 	void drawFrame() {
-		device->waitForFences(
-			Common::make_array(
-				inFlightFences[currentFrame]
-			)
-		);
+		{
+			auto fences = Common::make_array<vk::Fence>(
+				(vk::Fence)inFlightFences[currentFrame]
+			);
+			auto result = device->obj.waitForFences(
+				fences,
+				VK_TRUE,
+				UINT64_MAX
+			);
+			if (result != vk::Result::eSuccess) throw Common::Exception() << "" << (int)result;
+		}
 
 		// should this be a swapChain method?
 		// if so then how to return both imageIndex and result?
 		// if not result then how to provide callback upon recreate-swap-chain?
 		uint32_t imageIndex = {};
-		vk::Result result = vk::Result(vkAcquireNextImageKHR(
-			(*device)(),
-			(*swapChain)(),
-			UINT64_MAX,
-			imageAvailableSemaphores[currentFrame],
-			VK_NULL_HANDLE,
-			&imageIndex
-		));
-		if (result == vk::Result::eErrorOutOfDateKHR) {
-			recreateSwapChain();
-			return;
-		} else if (
-			result != vk::Result::eSuccess && 
-			result != vk::Result::eSuboptimalKHR
-		) {
-			throw Common::Exception() << "vkAcquireNextImageKHR failed: " << result;
+		{
+			auto result = vk::Result(vkAcquireNextImageKHR(
+				device->obj,
+				(*swapChain)(),
+				UINT64_MAX,
+				imageAvailableSemaphores[currentFrame],
+				VK_NULL_HANDLE,
+				&imageIndex
+			));
+			if (result == vk::Result::eErrorOutOfDateKHR) {
+				recreateSwapChain();
+				return;
+			} else if (
+				result != vk::Result::eSuccess && 
+				result != vk::Result::eSuboptimalKHR
+			) {
+				throw Common::Exception() << "vkAcquireNextImageKHR failed: " << result;
+			}
 		}
-		
+
 		updateUniformBuffer(currentFrame);
 
-		device->resetFences(
+		device->obj.resetFences(
 			Common::make_array(
 				inFlightFences[currentFrame]
 			)
 		);
 
 		{
-			auto o = VulkanCommandBuffer(commandBuffers[currentFrame]);
-			o.reset(/*VkCommandBufferResetFlagBits*/ 0);
-			recordCommandBuffer(&o, imageIndex);
-			
-			o.release();	//don't destroy
+			auto o = commandBuffers[currentFrame];
+			o.reset();
+			recordCommandBuffer(o, imageIndex);
 		}
 
 		auto waitSemaphores = Common::make_array(
@@ -3139,14 +2471,15 @@ public:
 		);
 
 		// static assert sizes match?
-		device->getGraphicsQueue().submit(
+		auto tmpCmdBuf = (VkCommandBuffer)commandBuffers[currentFrame];
+		device->graphicsQueue.submit(
 			vk::SubmitInfo(VkSubmitInfo{
 				.sType = (VkStructureType)vk::StructureType::eSubmitInfo,
 				.waitSemaphoreCount = (uint32_t)waitSemaphores.size(),
 				.pWaitSemaphores = waitSemaphores.data(),
 				.pWaitDstStageMask = waitStages.data(),
 				.commandBufferCount = 1,
-				.pCommandBuffers = &commandBuffers[currentFrame],
+				.pCommandBuffers = &tmpCmdBuf,
 				.signalSemaphoreCount = (uint32_t)signalSemaphores.size(),
 				.pSignalSemaphores = signalSemaphores.data(),
 			}),
@@ -3156,7 +2489,7 @@ public:
 		auto swapChains = Common::make_array<VkSwapchainKHR>(
 			(*swapChain)()
 		);
-		result = device->getPresentQueue().presentKHR(
+		auto result = device->presentQueue.presentKHR(
 			vk::PresentInfoKHR(VkPresentInfoKHR{
 				.sType = (VkStructureType)vk::StructureType::ePresentInfoKHR,
 				.waitSemaphoreCount = (uint32_t)signalSemaphores.size(),
@@ -3182,7 +2515,7 @@ public:
 	}
 public:
 	void loopDone() {
-		device->waitIdle();
+		device->obj.waitIdle();
 	}
 };
 
