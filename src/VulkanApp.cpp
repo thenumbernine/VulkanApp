@@ -29,8 +29,6 @@ template<
 	}
 }
 
-#define VULKAN_SAFE(f, ...) 	vulkanSafe(FILE_AND_LINE " " #f, f, __VA_ARGS__)
-
 #define SDL_VULKAN_SAFE(f, ...) {\
 	if (f(__VA_ARGS__) == SDL_FALSE) {\
 		throw Common::Exception() << FILE_AND_LINE " " #f " failed: " << SDL_GetError();\
@@ -194,11 +192,11 @@ struct Vertex {
 	Tensor::float3 texCoord;
 
 	static auto getBindingDescription() {
-		return VkVertexInputBindingDescription{
+		return vk::VertexInputBindingDescription(VkVertexInputBindingDescription{
 			.binding = 0,
 			.stride = sizeof(Vertex),
 			.inputRate = (VkVertexInputRate)vk::VertexInputRate::eVertex,
-		};
+		});
 	}
 
 	static auto getAttributeDescriptions() {
@@ -710,12 +708,16 @@ struct ThisVulkanRenderPass  {
 };
 
 struct VulkanSingleTimeCommand  {
+protected:	
 	//owns:
 	vk::CommandBuffer cmd;
 	//held:
 	vk::Device const device;
 	vk::Queue const queue;
 	vk::CommandPool const commandPool;
+
+public:
+	auto const & operator()() const { return cmd; }
 
 	VulkanSingleTimeCommand(
 		vk::Device const device_,
@@ -766,9 +768,11 @@ protected:
 	vk::Queue const graphicsQueue;
 public:
 	auto operator()() const { return (VkCommandPool)commandPool; }
+	
 	~VulkanCommandPool() {
 		device.destroyCommandPool(commandPool);
 	}
+	
 	VulkanCommandPool(
 		vk::Device const device_,
 		vk::Queue const graphicsQueue_,
@@ -785,12 +789,11 @@ public:
 		vk::Buffer dstBuffer,	//dest VkBuffer
 		vk::DeviceSize size
 	) const {
-		VulkanSingleTimeCommand commandBuffer(
+		VulkanSingleTimeCommand(
 			device,
 			graphicsQueue,
 			(*this)()
-		);
-		commandBuffer.cmd.copyBuffer(
+		)().copyBuffer(
 			srcBuffer,
 			dstBuffer,
 			vk::BufferCopy(VkBufferCopy{
@@ -805,12 +808,11 @@ public:
 		uint32_t width,
 		uint32_t height
 	) const {
-		VulkanSingleTimeCommand commandBuffer(
+		VulkanSingleTimeCommand(
 			device,
 			graphicsQueue,
 			(*this)()
-		);
-		commandBuffer.cmd.copyBufferToImage(
+		)().copyBufferToImage(
 			buffer,
 			image,
 			vk::ImageLayout::eTransferDstOptimal,
@@ -886,7 +888,7 @@ public:
 			throw Common::Exception() << "unsupported layout transition!";
 		}
 
-		commandBuffer.cmd.pipelineBarrier(
+		commandBuffer().pipelineBarrier(
 			sourceStage,
 			destinationStage,
 			{},
@@ -944,31 +946,16 @@ namespace VulkanDeviceMakeFromStagingBuffer {
 	}
 };
 
-struct VulkanDeviceMemoryBuffer  {
-protected:
-	//owns
-	vk::Buffer buffer;
-	vk::DeviceMemory memory;
-	//holds
-	vk::Device const device;
-public:
-	auto operator()() const { return (VkBuffer)buffer; }
-	vk::DeviceMemory const getMemory() const { return memory; }
-
-	~VulkanDeviceMemoryBuffer() {
-		device.freeMemory(memory);
-		device.destroyBuffer(buffer);
-	}
-
-	//ctor for VkBuffer's whether they are being ctor'd by staging or by uniforms whatever
-	VulkanDeviceMemoryBuffer(
+namespace VulkanDeviceMemoryBuffer  {
+	std::pair<vk::Buffer, vk::DeviceMemory>
+	create(
 		vk::PhysicalDevice const physicalDevice,
-		vk::Device const device_,
+		vk::Device const device,
 		vk::DeviceSize size,
 		vk::BufferUsageFlags usage,
 		vk::MemoryPropertyFlags properties
-	) : device(device_) {
-		buffer = device_.createBuffer(
+	) {
+		auto buffer = device.createBuffer(
 			vk::BufferCreateInfo(VkBufferCreateInfo{
 				.flags = (VkBufferCreateFlags)vk::BufferCreateFlags(),
 				.size = size,
@@ -978,7 +965,7 @@ public:
 		);
 		
 		auto memRequirements = device.getBufferMemoryRequirements(buffer);
-		memory = device.allocateMemory(vk::MemoryAllocateInfo(VkMemoryAllocateInfo{
+		auto memory = device.allocateMemory(vk::MemoryAllocateInfo(VkMemoryAllocateInfo{
 			.sType = (VkStructureType)vk::StructureType::eMemoryAllocateInfo,
 			.allocationSize = memRequirements.size,
 			.memoryTypeIndex = ThisVulkanPhysicalDevice::findMemoryType(
@@ -991,10 +978,11 @@ public:
 			buffer,
 			memory,
 			0);
+		return std::make_pair(buffer, memory);
 	}
 
-public:
-	static std::unique_ptr<VulkanDeviceMemoryBuffer> makeBufferFromStaged(
+	std::pair<vk::Buffer, vk::DeviceMemory>
+	makeBufferFromStaged(
 		vk::PhysicalDevice const physicalDevice,
 		vk::Device const & device,
 		VulkanCommandPool const & commandPool,
@@ -1011,7 +999,9 @@ public:
 			bufferSize
 		);
 
-		auto buffer = std::make_unique<VulkanDeviceMemoryBuffer>(
+		vk::Buffer buffer;
+		vk::DeviceMemory memory;
+		std::tie(buffer, memory) = VulkanDeviceMemoryBuffer::create(
 			physicalDevice,
 			device,
 			bufferSize,
@@ -1022,14 +1012,14 @@ public:
 		
 		commandPool.copyBuffer(
 			stagingBuffer,
-			(*buffer)(),
+			buffer,
 			bufferSize
 		);
 
 		device.destroyBuffer(stagingBuffer);
 		device.freeMemory(stagingBufferMemory);
 
-		return buffer;
+		return std::make_pair(buffer, memory);
 	}
 };
 
@@ -1165,10 +1155,10 @@ protected:
 	vk::DeviceMemory colorImageMemory;
 	vk::ImageView colorImageView;
 public:
-	VkExtent2D extent = {};
+	vk::Extent2D extent;
 	
 	// I would combine these into one struct so they can be dtored together
-	// but it seems vulkan wants VkImages linear for its getter?
+	// but it seems vulkan wants vk::Images linear for its getter?
 	std::vector<vk::Image> images;
 	std::vector<vk::ImageView> imageViews;
 	std::vector<vk::Framebuffer> framebuffers;
@@ -1380,17 +1370,17 @@ protected:
 		return vk::PresentModeKHR::eFifo;
 	}
 
-	static VkExtent2D chooseSwapExtent(
+	static vk::Extent2D chooseSwapExtent(
 		Tensor::int2 screenSize,
-		VkSurfaceCapabilitiesKHR const & capabilities
+		vk::SurfaceCapabilitiesKHR const capabilities
 	) {
 		if (capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max()) {
 			return capabilities.currentExtent;
 		} else {
-			VkExtent2D actualExtent = {
+			vk::Extent2D actualExtent(
 				(uint32_t)screenSize.x,
 				(uint32_t)screenSize.y
-			};
+			);
 			actualExtent.width = std::clamp(actualExtent.width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width);
 			actualExtent.height = std::clamp(actualExtent.height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height);
 			return actualExtent;
@@ -1533,28 +1523,14 @@ public:
 			device,
 			Common::File::read("shader-vert.spv")
 		);
-		auto vertShaderStageInfo = VkPipelineShaderStageCreateInfo{
-			.sType = (VkStructureType)vk::StructureType::ePipelineShaderStageCreateInfo,
-			.stage = (VkShaderStageFlagBits)vk::ShaderStageFlagBits::eVertex,
-			.module = vertShaderModule(),
-			.pName = "main",
-			//.pName = "vert",		// GLSL uses 'main', but clspv doesn't allow 'main', so ....
-		};
 		
 		auto fragShaderModule = VulkanShaderModule(
 			device,
 			Common::File::read("shader-frag.spv")
 		);
-		auto fragShaderStageInfo = VkPipelineShaderStageCreateInfo{
-			.sType = (VkStructureType)vk::StructureType::ePipelineShaderStageCreateInfo,
-			.stage = (VkShaderStageFlagBits)vk::ShaderStageFlagBits::eFragment,
-			.module = fragShaderModule(),
-			.pName = "main",
-			//.pName = "frag",
-		};
 		
 		auto bindingDescriptions = Common::make_array(
-			Vertex::getBindingDescription()
+			(VkVertexInputBindingDescription)Vertex::getBindingDescription()
 		);
 		auto attributeDescriptions = Vertex::getAttributeDescriptions();
 		auto vertexInputInfo = VkPipelineVertexInputStateCreateInfo{
@@ -1642,6 +1618,20 @@ public:
 			.pSetLayouts = descriptorSetLayouts.data(),
 		}));
 
+		auto vertShaderStageInfo = VkPipelineShaderStageCreateInfo{
+			.sType = (VkStructureType)vk::StructureType::ePipelineShaderStageCreateInfo,
+			.stage = (VkShaderStageFlagBits)vk::ShaderStageFlagBits::eVertex,
+			.module = vertShaderModule(),
+			.pName = "main",
+			//.pName = "vert",		// GLSL uses 'main', but clspv doesn't allow 'main', so ....
+		};
+		auto fragShaderStageInfo = VkPipelineShaderStageCreateInfo{
+			.sType = (VkStructureType)vk::StructureType::ePipelineShaderStageCreateInfo,
+			.stage = (VkShaderStageFlagBits)vk::ShaderStageFlagBits::eFragment,
+			.module = fragShaderModule(),
+			.pName = "main",
+			//.pName = "frag",
+		};
 		auto shaderStages = Common::make_array(
 			vertShaderStageInfo,
 			fragShaderStageInfo
@@ -1696,8 +1686,11 @@ protected:
 	std::unique_ptr<VulkanSwapChain> swapChain;
 	std::unique_ptr<VulkanGraphicsPipeline> graphicsPipeline;
 	std::unique_ptr<VulkanCommandPool> commandPool;
-	std::unique_ptr<VulkanDeviceMemoryBuffer> vertexBuffer;
-	std::unique_ptr<VulkanDeviceMemoryBuffer> indexBuffer;
+	
+	vk::Buffer vertexBuffer;
+	vk::DeviceMemory vertexBufferMemory;
+	vk::Buffer indexBuffer;
+	vk::DeviceMemory indexBufferMemory;
 	
 	uint32_t mipLevels = {};
 
@@ -1710,7 +1703,10 @@ protected:
 	std::vector<uint32_t> indices;
 
 	// hmm combine these two into a class?
-	std::vector<std::unique_ptr<VulkanDeviceMemoryBuffer>> uniformBuffers;
+	std::vector<std::pair<
+		vk::Buffer,
+		vk::DeviceMemory
+	>> uniformBuffers;
 	std::vector<void*> uniformBuffersMapped;
 	
 	std::unique_ptr<VulkanDescriptorPool> descriptorPool;
@@ -1835,7 +1831,8 @@ public:
 
 		loadModel();
 		
-		vertexBuffer = VulkanDeviceMemoryBuffer::makeBufferFromStaged(
+		std::tie(vertexBuffer, vertexBufferMemory) 
+		= VulkanDeviceMemoryBuffer::makeBufferFromStaged(
 			physicalDevice,
 			device,
 			*commandPool.get(),
@@ -1843,7 +1840,8 @@ public:
 			sizeof(vertices[0]) * vertices.size()
 		);
 
-		indexBuffer = VulkanDeviceMemoryBuffer::makeBufferFromStaged(
+		std::tie(indexBuffer, indexBufferMemory)
+		= VulkanDeviceMemoryBuffer::makeBufferFromStaged(
 			physicalDevice,
 			device,
 			*commandPool.get(),
@@ -1853,7 +1851,7 @@ public:
 
 		uniformBuffersMapped.resize(maxFramesInFlight);
 		for (size_t i = 0; i < maxFramesInFlight; i++) {
-			uniformBuffers.push_back(std::make_unique<VulkanDeviceMemoryBuffer>(
+			uniformBuffers.push_back(VulkanDeviceMemoryBuffer::create(
 				physicalDevice,
 				device,
 				sizeof(UniformBufferObject),
@@ -1863,7 +1861,7 @@ public:
 			));
 			vkMapMemory(
 				device,
-				uniformBuffers[i]->getMemory(),
+				std::get<1>(uniformBuffers[i]),
 				0,
 				sizeof(UniformBufferObject),
 				0,
@@ -1906,9 +1904,15 @@ protected:
 
 public:
 	~VulkanCommon() {
-		vertexBuffer = {};
-		indexBuffer = {};
-		uniformBuffers.clear();
+		device.freeMemory(vertexBufferMemory);
+		device.destroyBuffer(vertexBuffer);
+		device.freeMemory(indexBufferMemory);
+		device.destroyBuffer(indexBuffer);
+		for (auto & o : uniformBuffers) {
+			device.freeMemory(std::get<1>(o));
+			device.destroyBuffer(std::get<0>(o));
+		}
+
 		device.destroySampler(textureSampler);
 		device.destroyImageView(textureImageView);
 		device.freeMemory(textureImageMemory);
@@ -1948,7 +1952,7 @@ protected:
 		}
 		
 		char const * const srcData = image->getData();
-		VkDeviceSize const bufferSize = texSize.x * texSize.y * texBPP;
+		vk::DeviceSize const bufferSize = texSize.x * texSize.y * texBPP;
 		mipLevels = (uint32_t)std::floor(std::log2(std::max(texSize.x, texSize.y))) + 1;
 	
 		std::tie(textureImage, textureImageMemory) 
@@ -2015,7 +2019,7 @@ protected:
 			barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
 			barrier.dstAccessMask = vk::AccessFlagBits::eTransferRead;
 
-			commandBuffer.cmd.pipelineBarrier(
+			commandBuffer().pipelineBarrier(
 				vk::PipelineStageFlagBits::eTransfer,
 				vk::PipelineStageFlagBits::eTransfer,
 				vk::DependencyFlags{},
@@ -2051,7 +2055,7 @@ protected:
 				},
 			});
 			
-			commandBuffer.cmd.blitImage(
+			commandBuffer().blitImage(
 				image,
 				vk::ImageLayout::eTransferSrcOptimal,
 				image,
@@ -2065,7 +2069,7 @@ protected:
 			barrier.srcAccessMask = vk::AccessFlagBits::eTransferRead;
 			barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
 
-			commandBuffer.cmd.pipelineBarrier(
+			commandBuffer().pipelineBarrier(
 				vk::PipelineStageFlagBits::eTransfer,
 				vk::PipelineStageFlagBits::eFragmentShader,
 				{},
@@ -2084,7 +2088,7 @@ protected:
 		barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
 		barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
 
-		commandBuffer.cmd.pipelineBarrier(
+		commandBuffer().pipelineBarrier(
 			vk::PipelineStageFlagBits::eTransfer,
 			vk::PipelineStageFlagBits::eFragmentShader,
 			{},
@@ -2232,14 +2236,14 @@ protected:
 
 			commandBuffer.bindVertexBuffers(
 				0,
-				Common::make_array<vk::Buffer>(
-					(*vertexBuffer)()
+				Common::make_array(
+					vertexBuffer
 				),
 				Common::make_array<vk::DeviceSize>(0)
 			);
 
 			commandBuffer.bindIndexBuffer(
-				(*indexBuffer)(),
+				indexBuffer,
 				0,
 				vk::IndexType::eUint32
 			);
@@ -2299,7 +2303,7 @@ protected:
 
 		for (size_t i = 0; i < maxFramesInFlight; i++) {
 			auto bufferInfo = VkDescriptorBufferInfo{
-				.buffer = (*uniformBuffers[i])(),
+				.buffer = std::get<0>(uniformBuffers[i]),
 				.offset = 0,
 				.range = sizeof(UniformBufferObject),
 			};
