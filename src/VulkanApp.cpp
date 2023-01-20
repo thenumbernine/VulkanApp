@@ -796,9 +796,8 @@ public:
 		)().copyBuffer(
 			srcBuffer,
 			dstBuffer,
-			vk::BufferCopy(VkBufferCopy{
-				.size = size,
-			})
+			vk::BufferCopy()
+			.setSize(size)
 		);
 	}
 
@@ -816,23 +815,13 @@ public:
 			buffer,
 			image,
 			vk::ImageLayout::eTransferDstOptimal,
-			vk::BufferImageCopy(VkBufferImageCopy{
-				.bufferOffset = 0,
-				.bufferRowLength = 0,
-				.bufferImageHeight = 0,
-				.imageSubresource = {
-					.aspectMask = (VkImageAspectFlags)vk::ImageAspectFlagBits::eColor,
-					.mipLevel = 0,
-					.baseArrayLayer = 0,
-					.layerCount = 1,
-				},
-				.imageOffset = {0, 0, 0},
-				.imageExtent = {
-					width,
-					height,
-					1
-				},
-			})
+			vk::BufferImageCopy()
+			.setImageSubresource(
+				vk::ImageSubresourceLayers()
+				.setAspectMask(vk::ImageAspectFlagBits::eColor)
+				.setLayerCount(1)
+			)
+			.setImageExtent(vk::Extent3D(width, height, 1))
 		);
 	}
 
@@ -1144,8 +1133,6 @@ protected:
 	vk::SwapchainKHR obj;
 	//owned
 	vk::RenderPass renderPass;
-	// hold for this class lifespan
-	vk::Device device;
 
 	vk::Image depthImage;
 	vk::DeviceMemory depthImageMemory;
@@ -1154,6 +1141,9 @@ protected:
 	vk::Image colorImage;
 	vk::DeviceMemory colorImageMemory;
 	vk::ImageView colorImageView;
+	
+	// hold for this class lifespan
+	vk::Device const device;
 public:
 	vk::Extent2D extent;
 	
@@ -1164,7 +1154,7 @@ public:
 	std::vector<vk::Framebuffer> framebuffers;
 	
 public:
-	auto operator()() const { return (VkSwapchainKHR)obj; }
+	auto const & operator()() const { return obj; }
 	auto const & getRenderPass() const { return renderPass; }
 
 	~VulkanSwapChain() {
@@ -1197,7 +1187,7 @@ public:
 	VulkanSwapChain(
 		Tensor::int2 screenSize,
 		vk::PhysicalDevice physicalDevice,
-		vk::Device device_,
+		vk::Device const device_,
 		vk::SurfaceKHR surface,
 		vk::SampleCountFlagBits msaaSamples
 	) : device(device_) {
@@ -1388,125 +1378,42 @@ protected:
 	}
 };
 
-//only used by VulkanGraphicsPipeline
-struct VulkanDescriptorSetLayout {
-protected:
-	vk::DescriptorSetLayout obj;
-	//held for dtor
-	vk::Device const device;
-public:
-	auto operator()() const { return (VkDescriptorSetLayout)obj; }
-
-	~VulkanDescriptorSetLayout() {
-		device.destroyDescriptorSetLayout(obj);
-	}
-	
-	VulkanDescriptorSetLayout(
-		vk::Device const device_
-	) : device(device_) {
-		auto bindings = Common::make_array(
-			VkDescriptorSetLayoutBinding{	//uboLayoutBinding
-				.binding = 0,
-				.descriptorType = (VkDescriptorType)vk::DescriptorType::eUniformBuffer,
-				.descriptorCount = 1,
-				.stageFlags = (VkShaderStageFlags)vk::ShaderStageFlagBits::eVertex,
-			},
-			VkDescriptorSetLayoutBinding{	//samplerLayoutBinding
-				.binding = 1,
-				.descriptorType = (VkDescriptorType)vk::DescriptorType::eCombinedImageSampler,
-				.descriptorCount = 1,
-				.stageFlags = (VkShaderStageFlags)vk::ShaderStageFlagBits::eFragment,
-			}
-		);
-		obj = device.createDescriptorSetLayout(vk::DescriptorSetLayoutCreateInfo(VkDescriptorSetLayoutCreateInfo{
-			.sType = (VkStructureType)vk::StructureType::eDescriptorSetLayoutCreateInfo,
-			.bindingCount = (uint32_t)bindings.size(),
-			.pBindings = bindings.data(),
-		}));
-	}
-};
-
-// only wrapping crete/destroy so ... raii?
-struct VulkanDescriptorPool {
-protected:
-	vk::DescriptorPool obj;
-	//held for dtor
-	vk::Device const device;
-public:
-	auto operator()() const { return (VkDescriptorPool)obj; }
-
-	~VulkanDescriptorPool() {
-		device.destroyDescriptorPool(obj);
-	}
-
-	VulkanDescriptorPool(
-		vk::Device const device_,
-		uint32_t const maxFramesInFlight
-	) : device(device_) {
-		auto poolSizes = Common::make_array(
-			VkDescriptorPoolSize{
-				.type = (VkDescriptorType)vk::DescriptorType::eUniformBuffer,
-				.descriptorCount = maxFramesInFlight,
-			},
-			VkDescriptorPoolSize{
-				.type = (VkDescriptorType)vk::DescriptorType::eCombinedImageSampler,
-				.descriptorCount = maxFramesInFlight,
-			}
-		);
-		obj = device.createDescriptorPool(vk::DescriptorPoolCreateInfo(VkDescriptorPoolCreateInfo{
-			.sType = (VkStructureType)vk::StructureType::eDescriptorPoolCreateInfo,
-			.maxSets = maxFramesInFlight,
-			.poolSizeCount = (uint32_t)poolSizes.size(),
-			.pPoolSizes = poolSizes.data(),
-		}));
-	}
-};
-
 //only used by VulkanGraphicsPipeline's ctor
-struct VulkanShaderModule {
-protected:
-	vk::ShaderModule obj;
-	//held:
-	vk::Device const device;
-public:
-	auto operator()() const { return (VkShaderModule)obj; }
-
-	~VulkanShaderModule() {
-		device.destroyShaderModule(obj);
-	}
-	
-	VulkanShaderModule(
-		vk::Device const device_,
-		std::string const code
-	) : device(device_) {
-		obj = device.createShaderModule(vk::ShaderModuleCreateInfo(VkShaderModuleCreateInfo{
-			.sType = (VkStructureType)vk::StructureType::eShaderModuleCreateInfo,
-			.codeSize = code.length(),
-			.pCode = reinterpret_cast<uint32_t const *>(code.data()),
-		}));
+namespace VulkanShaderModule {
+	vk::ShaderModule fromFile(
+		vk::Device const device,
+		std::string const filename
+	) {
+		auto code = Common::File::read(filename);
+		return device.createShaderModule(
+			vk::ShaderModuleCreateInfo()
+			// why isn't there one method that does these two things?
+			.setPCode((uint32_t const *)code.data())
+			.setCodeSize(code.size())
+		);
 	}
 };
 
 struct VulkanGraphicsPipeline  {
 protected:
-	vk::Pipeline obj;
 	//owned:
+	vk::Pipeline obj;
 	vk::PipelineLayout pipelineLayout;
-	std::unique_ptr<VulkanDescriptorSetLayout> descriptorSetLayout;
-	
+	vk::DescriptorSetLayout descriptorSetLayout;
 	//held:
 	vk::Device const device;				//held for dtor
 public:
-	auto operator()() const { return (VkPipeline)obj; }
+	auto const & operator()() const { return obj; }
 	auto const & getPipelineLayout() const { return pipelineLayout; }
 	
-	VulkanDescriptorSetLayout * getDescriptorSetLayout() { return descriptorSetLayout.get(); }
-	VulkanDescriptorSetLayout const * getDescriptorSetLayout() const { return descriptorSetLayout.get(); }
+	vk::DescriptorSetLayout const & getDescriptorSetLayout() {
+		return descriptorSetLayout;
+	}
 
 	~VulkanGraphicsPipeline() {
 		device.destroyPipelineLayout(pipelineLayout);
 		device.destroyPipeline(obj);
-		descriptorSetLayout = nullptr;
+		device.destroyDescriptorSetLayout(descriptorSetLayout);
 	}
 
 	VulkanGraphicsPipeline(
@@ -1517,16 +1424,33 @@ public:
 	) : device(device_) {
 		
 		// descriptorSetLayout is only used by graphicsPipeline
-		descriptorSetLayout = std::make_unique<VulkanDescriptorSetLayout>(device);
+		auto bindings = Common::make_array(
+			vk::DescriptorSetLayoutBinding(VkDescriptorSetLayoutBinding{	//uboLayoutBinding
+				.binding = 0,
+				.descriptorType = (VkDescriptorType)vk::DescriptorType::eUniformBuffer,
+				.descriptorCount = 1,
+				.stageFlags = (VkShaderStageFlags)vk::ShaderStageFlagBits::eVertex,
+			}),
+			vk::DescriptorSetLayoutBinding(VkDescriptorSetLayoutBinding{	//samplerLayoutBinding
+				.binding = 1,
+				.descriptorType = (VkDescriptorType)vk::DescriptorType::eCombinedImageSampler,
+				.descriptorCount = 1,
+				.stageFlags = (VkShaderStageFlags)vk::ShaderStageFlagBits::eFragment,
+			})
+		);
+		descriptorSetLayout = device.createDescriptorSetLayout(
+			vk::DescriptorSetLayoutCreateInfo()
+			.setBindings(bindings)
+		);
 
-		auto vertShaderModule = VulkanShaderModule(
+		auto vertShaderModule = VulkanShaderModule::fromFile(
 			device,
-			Common::File::read("shader-vert.spv")
+			"shader-vert.spv"
 		);
 		
-		auto fragShaderModule = VulkanShaderModule(
+		auto fragShaderModule = VulkanShaderModule::fromFile(
 			device,
-			Common::File::read("shader-frag.spv")
+			"shader-frag.spv"
 		);
 		
 		auto bindingDescriptions = Common::make_array(
@@ -1610,7 +1534,7 @@ public:
 		};
 		
 		auto descriptorSetLayouts = Common::make_array<VkDescriptorSetLayout>(
-			(*descriptorSetLayout)()
+			(VkDescriptorSetLayout)descriptorSetLayout
 		);
 		pipelineLayout = device.createPipelineLayout(vk::PipelineLayoutCreateInfo(VkPipelineLayoutCreateInfo{
 			.sType = (VkStructureType)vk::StructureType::ePipelineLayoutCreateInfo,
@@ -1621,14 +1545,14 @@ public:
 		auto vertShaderStageInfo = VkPipelineShaderStageCreateInfo{
 			.sType = (VkStructureType)vk::StructureType::ePipelineShaderStageCreateInfo,
 			.stage = (VkShaderStageFlagBits)vk::ShaderStageFlagBits::eVertex,
-			.module = vertShaderModule(),
+			.module = vertShaderModule,
 			.pName = "main",
 			//.pName = "vert",		// GLSL uses 'main', but clspv doesn't allow 'main', so ....
 		};
 		auto fragShaderStageInfo = VkPipelineShaderStageCreateInfo{
 			.sType = (VkStructureType)vk::StructureType::ePipelineShaderStageCreateInfo,
 			.stage = (VkShaderStageFlagBits)vk::ShaderStageFlagBits::eFragment,
-			.module = fragShaderModule(),
+			.module = fragShaderModule,
 			.pName = "main",
 			//.pName = "frag",
 		};
@@ -1659,6 +1583,9 @@ public:
 			vk::PipelineCache{},
 			infos 
 		).value[0];
+	
+		device.destroyShaderModule(vertShaderModule);
+		device.destroyShaderModule(fragShaderModule);
 	}
 };
 
@@ -1709,7 +1636,7 @@ protected:
 	>> uniformBuffers;
 	std::vector<void*> uniformBuffersMapped;
 	
-	std::unique_ptr<VulkanDescriptorPool> descriptorPool;
+	vk::DescriptorPool descriptorPool;
 	
 	// each of these, there are one per number of frames in flight
 	std::vector<vk::DescriptorSet> descriptorSets;
@@ -1869,11 +1796,25 @@ public:
 			);
 		}
 
-		descriptorPool = std::make_unique<VulkanDescriptorPool>(
-			device,
-			(uint32_t)maxFramesInFlight
-		);
+		{
+			auto poolSizes = Common::make_array(
+				vk::DescriptorPoolSize()
+				.setType(vk::DescriptorType::eUniformBuffer)
+				.setDescriptorCount(maxFramesInFlight),
+				vk::DescriptorPoolSize()
+				.setType(vk::DescriptorType::eCombinedImageSampler)
+				.setDescriptorCount(maxFramesInFlight)
+			);
 		
+			descriptorPool = device.createDescriptorPool(
+				vk::DescriptorPoolCreateInfo()
+				.setMaxSets(maxFramesInFlight)
+				//why aren't these two merged into one function?
+				.setPoolSizeCount(poolSizes.size())
+				.setPPoolSizes(poolSizes.data())
+			);
+		}
+
 		createDescriptorSets();
 		
 		initCommandBuffers();
@@ -1904,6 +1845,7 @@ protected:
 
 public:
 	~VulkanCommon() {
+		device.destroyDescriptorPool(descriptorPool);
 		device.freeMemory(vertexBufferMemory);
 		device.destroyBuffer(vertexBuffer);
 		device.freeMemory(indexBufferMemory);
@@ -2162,12 +2104,12 @@ protected:
 
 	void initCommandBuffers() {
 		// TODO this matches 'VulkanSingleTimeCommand' ctor
-		commandBuffers = device.allocateCommandBuffers(vk::CommandBufferAllocateInfo(VkCommandBufferAllocateInfo{
-			.sType = (VkStructureType)vk::StructureType::eCommandBufferAllocateInfo,
-			.commandPool = (*commandPool)(),
-			.level = (VkCommandBufferLevel)vk::CommandBufferLevel::ePrimary,
-			.commandBufferCount = (uint32_t)maxFramesInFlight,
-		}));
+		commandBuffers = device.allocateCommandBuffers(
+			vk::CommandBufferAllocateInfo()
+				.setCommandPool((*commandPool)())
+				.setLevel(vk::CommandBufferLevel::ePrimary)
+				.setCommandBufferCount(maxFramesInFlight)
+		);
 		// end part that matches
 	}
 
@@ -2176,31 +2118,24 @@ protected:
 		uint32_t imageIndex
 	) {
 		// TODO this part matches VulkanSingleTimeCommand ctor
-		commandBuffer.begin(VkCommandBufferBeginInfo{
-			.sType = (VkStructureType)vk::StructureType::eCommandBufferBeginInfo,
-		});
+		commandBuffer.begin(vk::CommandBufferBeginInfo{});
 		// end part that matches
 
 		auto clearValues = Common::make_array(
-			VkClearValue{
-				.color = {{0, 0, 0, 1}},
-			},
-			VkClearValue{
-				.depthStencil = {1, 0},
-			}
+			vk::ClearValue()
+				.setColor(vk::ClearColorValue(Common::make_array<float>(0.f, 0.f, 0.f, 1.f))),
+			vk::ClearValue()
+				.setDepthStencil(vk::ClearDepthStencilValue(1.f, 0))
 		);
 		commandBuffer.beginRenderPass(
-			vk::RenderPassBeginInfo(VkRenderPassBeginInfo{
-				.sType = (VkStructureType)vk::StructureType::eRenderPassBeginInfo,
-				.renderPass = swapChain->getRenderPass(),
-				.framebuffer = swapChain->framebuffers[imageIndex],
-				.renderArea = {
-					.offset = {0, 0},
-					.extent = swapChain->extent,
-				},
-				.clearValueCount = (uint32_t)clearValues.size(),
-				.pClearValues = clearValues.data(),
-			}),
+			vk::RenderPassBeginInfo()
+				.setRenderPass(swapChain->getRenderPass())
+				.setFramebuffer(swapChain->framebuffers[imageIndex])
+				.setRenderArea(
+					vk::Rect2D()
+						.setExtent(swapChain->extent)
+				)
+				.setClearValues(clearValues),
 			vk::SubpassContents::eInline
 		);
 
@@ -2213,24 +2148,19 @@ protected:
 			commandBuffer.setViewport(
 				0,
 				Common::make_array(
-					vk::Viewport(VkViewport{
-						.x = 0,
-						.y = 0,
-						.width = (float)swapChain->extent.width,
-						.height = (float)swapChain->extent.height,
-						.minDepth = 0,
-						.maxDepth = 1,
-					})
+					vk::Viewport()
+						.setWidth(swapChain->extent.width)
+						.setHeight(swapChain->extent.height)
+						.setMinDepth(0)
+						.setMaxDepth(1)
 				)
 			);
 
 			commandBuffer.setScissor(
 				0,
 				Common::make_array(
-					vk::Rect2D(VkRect2D{
-						.offset = {0, 0},
-						.extent = swapChain->extent,
-					})
+					vk::Rect2D()
+						.setExtent(swapChain->extent)
 				)
 			);
 
@@ -2274,61 +2204,47 @@ protected:
 		renderFinishedSemaphores.resize(maxFramesInFlight);
 		inFlightFences.resize(maxFramesInFlight);
 
-		auto semaphoreInfo = VkSemaphoreCreateInfo{
-			.sType = (VkStructureType)vk::StructureType::eSemaphoreCreateInfo,
-		};
-
-		auto fenceInfo = VkFenceCreateInfo{
-			.sType = (VkStructureType)vk::StructureType::eFenceCreateInfo,
-			.flags = (VkFenceCreateFlags)vk::FenceCreateFlagBits::eSignaled,
-		};
-
 		for (size_t i = 0; i < maxFramesInFlight; i++) {
-			imageAvailableSemaphores[i] = device.createSemaphore(semaphoreInfo);
-			renderFinishedSemaphores[i] = device.createSemaphore(semaphoreInfo);
-			inFlightFences[i] = device.createFence(fenceInfo);
+			imageAvailableSemaphores[i] = device.createSemaphore({});
+			renderFinishedSemaphores[i] = device.createSemaphore({});
+			inFlightFences[i] = device.createFence(
+				vk::FenceCreateInfo()
+					.setFlags(vk::FenceCreateFlagBits::eSignaled)
+			);
 		}
 	}
 
 	void createDescriptorSets() {
-		std::vector<VkDescriptorSetLayout> layouts(maxFramesInFlight, (*graphicsPipeline->getDescriptorSetLayout())());
+		std::vector<vk::DescriptorSetLayout> layouts(maxFramesInFlight, graphicsPipeline->getDescriptorSetLayout());
 		descriptorSets = device.allocateDescriptorSets(
-			vk::DescriptorSetAllocateInfo(VkDescriptorSetAllocateInfo{
-				.sType = (VkStructureType)vk::StructureType::eDescriptorSetAllocateInfo,
-				.descriptorPool = (*descriptorPool)(),
-				.descriptorSetCount = (uint32_t)maxFramesInFlight,
-				.pSetLayouts = layouts.data(),
-			})
+			vk::DescriptorSetAllocateInfo()
+				.setDescriptorPool(descriptorPool)
+				.setDescriptorSetCount(maxFramesInFlight)
+				.setSetLayouts(layouts)
 		);
 
 		for (size_t i = 0; i < maxFramesInFlight; i++) {
-			auto bufferInfo = VkDescriptorBufferInfo{
-				.buffer = std::get<0>(uniformBuffers[i]),
-				.offset = 0,
-				.range = sizeof(UniformBufferObject),
-			};
-			auto imageInfo = VkDescriptorImageInfo{
-				.sampler = textureSampler,
-				.imageView = textureImageView,
-				.imageLayout = (VkImageLayout)vk::ImageLayout::eShaderReadOnlyOptimal,
-			};
+			auto bufferInfo = vk::DescriptorBufferInfo()
+				.setBuffer(std::get<0>(uniformBuffers[i]))
+				.setRange(sizeof(UniformBufferObject));
+			auto imageInfo = vk::DescriptorImageInfo()
+				.setSampler(textureSampler)
+				.setImageView(textureImageView)
+				.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
 			auto descriptorWrites = Common::make_array(
-				vk::WriteDescriptorSet(VkWriteDescriptorSet{
-					.sType = (VkStructureType)vk::StructureType::eWriteDescriptorSet,
-					.dstSet = descriptorSets[i],
-					.dstBinding = 0,
-					.descriptorCount = 1,
-					.descriptorType = (VkDescriptorType)vk::DescriptorType::eUniformBuffer,
-					.pBufferInfo = &bufferInfo,
-				}),
-				vk::WriteDescriptorSet(VkWriteDescriptorSet{
-					.sType = (VkStructureType)vk::StructureType::eWriteDescriptorSet,
-					.dstSet = descriptorSets[i],
-					.dstBinding = 1,
-					.descriptorCount = 1,
-					.descriptorType = (VkDescriptorType)vk::DescriptorType::eCombinedImageSampler,
-					.pImageInfo = &imageInfo,
-				})
+				vk::WriteDescriptorSet()
+					.setDstSet(descriptorSets[i])
+					.setDstBinding(0)
+					.setDescriptorCount(1)
+					.setDescriptorType(vk::DescriptorType::eUniformBuffer)
+					.setBufferInfo(bufferInfo)
+				,
+				vk::WriteDescriptorSet()
+					.setDstSet(descriptorSets[i])
+					.setDstBinding(1)
+					.setDescriptorCount(1)
+					.setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
+					.setImageInfo(imageInfo)
 			);
 			device.updateDescriptorSets(
 				descriptorWrites,
@@ -2465,47 +2381,38 @@ public:
 		}
 
 		auto waitSemaphores = Common::make_array(
-			(VkSemaphore)imageAvailableSemaphores[currentFrame]
+			imageAvailableSemaphores[currentFrame]
 		);
-		auto waitStages = Common::make_array<VkPipelineStageFlags>(
-			(VkPipelineStageFlags)vk::PipelineStageFlagBits::eColorAttachmentOutput
+		auto waitStages = Common::make_array<vk::PipelineStageFlags>(
+			vk::PipelineStageFlagBits::eColorAttachmentOutput
 		);
 		static_assert(waitSemaphores.size() == waitStages.size());
 		
 		auto signalSemaphores = Common::make_array(
-			(VkSemaphore)renderFinishedSemaphores[currentFrame]
+			renderFinishedSemaphores[currentFrame]
 		);
 
 		// static assert sizes match?
-		auto tmpCmdBuf = (VkCommandBuffer)commandBuffers[currentFrame];
+		auto cmdBufs = Common::make_array(
+			commandBuffers[currentFrame]
+		);
 		graphicsQueue.submit(
-			vk::SubmitInfo(VkSubmitInfo{
-				.sType = (VkStructureType)vk::StructureType::eSubmitInfo,
-				.waitSemaphoreCount = (uint32_t)waitSemaphores.size(),
-				.pWaitSemaphores = waitSemaphores.data(),
-				.pWaitDstStageMask = waitStages.data(),
-				.commandBufferCount = 1,
-				.pCommandBuffers = &tmpCmdBuf,
-				.signalSemaphoreCount = (uint32_t)signalSemaphores.size(),
-				.pSignalSemaphores = signalSemaphores.data(),
-			}),
+			vk::SubmitInfo()
+			.setWaitSemaphores(waitSemaphores)
+			.setWaitDstStageMask(waitStages)
+			.setCommandBuffers(cmdBufs)
+			.setSignalSemaphores(signalSemaphores),
 			inFlightFences[currentFrame]
 		);
 		
-		auto swapChains = Common::make_array<VkSwapchainKHR>(
+		auto swapChains = Common::make_array(
 			(*swapChain)()
 		);
 		auto result = presentQueue.presentKHR(
-			vk::PresentInfoKHR(VkPresentInfoKHR{
-				.sType = (VkStructureType)vk::StructureType::ePresentInfoKHR,
-				.waitSemaphoreCount = (uint32_t)signalSemaphores.size(),
-				// these two sizes need t match (right?)
-				.pWaitSemaphores = signalSemaphores.data(),
-				.swapchainCount = (uint32_t)swapChains.size(),
-				// wait do these two sizes need to match?
-				.pSwapchains = swapChains.data(),
-				.pImageIndices = &imageIndex,
-			})
+			vk::PresentInfoKHR()
+			.setWaitSemaphores(signalSemaphores)
+			.setSwapchains(swapChains)
+			.setPImageIndices(&imageIndex)
 		);
 		if (result == vk::Result::eErrorOutOfDateKHR || 
 			result == vk::Result::eSuboptimalKHR || 
