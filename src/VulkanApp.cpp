@@ -192,33 +192,29 @@ struct Vertex {
 	Tensor::float3 texCoord;
 
 	static auto getBindingDescription() {
-		return vk::VertexInputBindingDescription(VkVertexInputBindingDescription{
-			.binding = 0,
-			.stride = sizeof(Vertex),
-			.inputRate = (VkVertexInputRate)vk::VertexInputRate::eVertex,
-		});
+		return vk::VertexInputBindingDescription()
+			.setBinding(0)
+			.setStride(sizeof(Vertex))
+			.setInputRate(vk::VertexInputRate::eVertex);
 	}
 
 	static auto getAttributeDescriptions() {
 		return Common::make_array(
-			VkVertexInputAttributeDescription{
-				.location = 0,
-				.binding = 0,
-				.format = (VkFormat)vk::Format::eR32G32B32Sfloat,
-				.offset = offsetof(Vertex, pos),
-			},
-			VkVertexInputAttributeDescription{
-				.location = 1,
-				.binding = 0,
-				.format = (VkFormat)vk::Format::eR32G32B32Sfloat,
-				.offset = offsetof(Vertex, color),
-			},
-			VkVertexInputAttributeDescription{
-				.location = 2,
-				.binding = 0,
-				.format = (VkFormat)vk::Format::eR32G32Sfloat,
-				.offset = offsetof(Vertex, texCoord),
-			}
+			vk::VertexInputAttributeDescription()
+				.setLocation(0)
+				.setBinding(0)
+				.setFormat(vk::Format::eR32G32B32Sfloat)
+				.setOffset(offsetof(Vertex, pos)),
+			vk::VertexInputAttributeDescription()
+				.setLocation(1)
+				.setBinding(0)
+				.setFormat(vk::Format::eR32G32B32Sfloat)
+				.setOffset(offsetof(Vertex, color)),
+			vk::VertexInputAttributeDescription()
+				.setLocation(2)
+				.setBinding(0)
+				.setFormat(vk::Format::eR32G32Sfloat)
+				.setOffset(offsetof(Vertex, texCoord))
 		);
 	}
 
@@ -1454,130 +1450,102 @@ public:
 		);
 		
 		auto bindingDescriptions = Common::make_array(
-			(VkVertexInputBindingDescription)Vertex::getBindingDescription()
+			Vertex::getBindingDescription()
 		);
 		auto attributeDescriptions = Vertex::getAttributeDescriptions();
-		auto vertexInputInfo = VkPipelineVertexInputStateCreateInfo{
-			.sType = (VkStructureType)vk::StructureType::ePipelineVertexInputStateCreateInfo,
-			.vertexBindingDescriptionCount = (uint32_t)bindingDescriptions.size(),
-			.pVertexBindingDescriptions = bindingDescriptions.data(),
-			.vertexAttributeDescriptionCount = (uint32_t)attributeDescriptions.size(),
-			.pVertexAttributeDescriptions = attributeDescriptions.data(),
-		};
+		auto vertexInputInfo = vk::PipelineVertexInputStateCreateInfo()
+			.setVertexBindingDescriptions(bindingDescriptions)
+			.setVertexAttributeDescriptions(attributeDescriptions);
 
-		auto inputAssembly = VkPipelineInputAssemblyStateCreateInfo{
-			.sType = (VkStructureType)vk::StructureType::ePipelineInputAssemblyStateCreateInfo,
-			.topology = (VkPrimitiveTopology)vk::PrimitiveTopology::eTriangleList,
-			.primitiveRestartEnable = VK_FALSE,
-		};
+		auto inputAssembly = vk::PipelineInputAssemblyStateCreateInfo()
+			.setTopology(vk::PrimitiveTopology::eTriangleList)
+			.setPrimitiveRestartEnable(false);
 
-		auto viewportState = VkPipelineViewportStateCreateInfo{
-			.sType = (VkStructureType)vk::StructureType::ePipelineViewportStateCreateInfo,
-			.viewportCount = 1,
-			.scissorCount = 1,
-		};
+		auto viewportState = vk::PipelineViewportStateCreateInfo()
+			.setViewportCount(1)
+			.setScissorCount(1);
 
-		auto rasterizer = VkPipelineRasterizationStateCreateInfo{
-			.sType = (VkStructureType)vk::StructureType::ePipelineRasterizationStateCreateInfo,
-			.depthClampEnable = VK_FALSE,
-			.rasterizerDiscardEnable = VK_FALSE,
-			.polygonMode = (VkPolygonMode)vk::PolygonMode::eFill,
+		auto rasterizer = vk::PipelineRasterizationStateCreateInfo()
+			.setDepthClampEnable(false)
+			.setRasterizerDiscardEnable(false)
+			.setPolygonMode(vk::PolygonMode::eFill)
 			//.cullMode = vk::CullModeFlagBits::eBack,
 			//.frontFace = vk::FrontFace::eClockwise,
 			//.frontFace = vk::FrontFace::eCounterClockwise,
-			.depthBiasEnable = VK_FALSE,
-			.lineWidth = 1,
-		};
+			.setDepthBiasEnable(false)
+			.setLineWidth(1);
 
-		auto multisampling = VkPipelineMultisampleStateCreateInfo{
-			.sType = (VkStructureType)vk::StructureType::ePipelineMultisampleStateCreateInfo,
-			.rasterizationSamples = (VkSampleCountFlagBits)msaaSamples,
-			.sampleShadingEnable = VK_FALSE,
-		};
+		auto multisampling = vk::PipelineMultisampleStateCreateInfo()
+			.setRasterizationSamples(msaaSamples)
+			.setSampleShadingEnable(false);
 
-		auto depthStencil = VkPipelineDepthStencilStateCreateInfo{
-			.sType = (VkStructureType)vk::StructureType::ePipelineDepthStencilStateCreateInfo,
-			.depthTestEnable = VK_TRUE,
-			.depthWriteEnable = VK_TRUE,
-			.depthCompareOp = (VkCompareOp)vk::CompareOp::eLess,
-			.depthBoundsTestEnable = VK_FALSE,
-			.stencilTestEnable = VK_FALSE,
-		};
+		auto depthStencil = vk::PipelineDepthStencilStateCreateInfo()
+			.setDepthTestEnable(true)
+			.setDepthWriteEnable(true)
+			.setDepthCompareOp(vk::CompareOp::eLess)
+			.setDepthBoundsTestEnable(false)
+			.setStencilTestEnable(false);
 
-		auto colorBlendAttachment = VkPipelineColorBlendAttachmentState{
-			.blendEnable = VK_FALSE,
-			.colorWriteMask = (VkColorComponentFlags)(
+		auto colorBlendAttachment = vk::PipelineColorBlendAttachmentState()
+			.setBlendEnable(false)
+			.setColorWriteMask(
 				vk::ColorComponentFlagBits::eR
 				| vk::ColorComponentFlagBits::eG
 				| vk::ColorComponentFlagBits::eB
 				| vk::ColorComponentFlagBits::eA
-			),
-		};
+			);
 
-		auto colorBlending = VkPipelineColorBlendStateCreateInfo{
-			.sType = (VkStructureType)vk::StructureType::ePipelineColorBlendStateCreateInfo,
-			.logicOpEnable = VK_FALSE,
-			.logicOp = (VkLogicOp)vk::LogicOp::eCopy,
-			.attachmentCount = 1,
-			.pAttachments = &colorBlendAttachment,
-			.blendConstants = {0,0,0,0},
-		};
+		auto colorBlending = vk::PipelineColorBlendStateCreateInfo()
+			.setLogicOpEnable(false)
+			.setLogicOp(vk::LogicOp::eCopy)
+			.setAttachmentCount(1)
+			.setPAttachments(&colorBlendAttachment)
+			.setBlendConstants({0.f, 0.f, 0.f, 0.f});
 
-		auto dynamicStates = Common::make_array<VkDynamicState>(
-			(VkDynamicState)vk::DynamicState::eViewport,
-			(VkDynamicState)vk::DynamicState::eScissor
+		auto dynamicStates = Common::make_array(
+			vk::DynamicState::eViewport,
+			vk::DynamicState::eScissor
 		);
-		auto dynamicState = VkPipelineDynamicStateCreateInfo{
-			.sType = (VkStructureType)vk::StructureType::ePipelineDynamicStateCreateInfo,
-			.dynamicStateCount = (uint32_t)dynamicStates.size(),
-			.pDynamicStates = dynamicStates.data(),
-		};
+		auto dynamicState = vk::PipelineDynamicStateCreateInfo()
+			.setDynamicStates(dynamicStates);
 		
-		auto descriptorSetLayouts = Common::make_array<VkDescriptorSetLayout>(
-			(VkDescriptorSetLayout)descriptorSetLayout
+		auto descriptorSetLayouts = Common::make_array(
+			descriptorSetLayout
 		);
-		pipelineLayout = device.createPipelineLayout(vk::PipelineLayoutCreateInfo(VkPipelineLayoutCreateInfo{
-			.sType = (VkStructureType)vk::StructureType::ePipelineLayoutCreateInfo,
-			.setLayoutCount = (uint32_t)descriptorSetLayouts.size(),
-			.pSetLayouts = descriptorSetLayouts.data(),
-		}));
+		pipelineLayout = device.createPipelineLayout(
+			vk::PipelineLayoutCreateInfo()
+				.setSetLayouts(descriptorSetLayouts)
+		);
 
-		auto vertShaderStageInfo = VkPipelineShaderStageCreateInfo{
-			.sType = (VkStructureType)vk::StructureType::ePipelineShaderStageCreateInfo,
-			.stage = (VkShaderStageFlagBits)vk::ShaderStageFlagBits::eVertex,
-			.module = vertShaderModule,
-			.pName = "main",
+		auto vertShaderStageInfo = vk::PipelineShaderStageCreateInfo()
+			.setStage(vk::ShaderStageFlagBits::eVertex)
+			.setModule(vertShaderModule)
+			.setPName("main");
 			//.pName = "vert",		// GLSL uses 'main', but clspv doesn't allow 'main', so ....
-		};
-		auto fragShaderStageInfo = VkPipelineShaderStageCreateInfo{
-			.sType = (VkStructureType)vk::StructureType::ePipelineShaderStageCreateInfo,
-			.stage = (VkShaderStageFlagBits)vk::ShaderStageFlagBits::eFragment,
-			.module = fragShaderModule,
-			.pName = "main",
+		auto fragShaderStageInfo = vk::PipelineShaderStageCreateInfo()
+			.setStage(vk::ShaderStageFlagBits::eFragment)
+			.setModule(fragShaderModule)
+			.setPName("main");
 			//.pName = "frag",
-		};
 		auto shaderStages = Common::make_array(
 			vertShaderStageInfo,
 			fragShaderStageInfo
 		);
 		auto infos = Common::make_array(
-			vk::GraphicsPipelineCreateInfo(VkGraphicsPipelineCreateInfo{
-				.sType = (VkStructureType)vk::StructureType::eGraphicsPipelineCreateInfo,
-				.stageCount = (uint32_t)shaderStages.size(),
-				.pStages = shaderStages.data(),
-				.pVertexInputState = &vertexInputInfo,
-				.pInputAssemblyState = &inputAssembly,
-				.pViewportState = &viewportState,
-				.pRasterizationState = &rasterizer,
-				.pMultisampleState = &multisampling,
-				.pDepthStencilState = &depthStencil,
-				.pColorBlendState = &colorBlending,
-				.pDynamicState = &dynamicState,
-				.layout = pipelineLayout,
-				.renderPass = renderPass,
-				.subpass = 0,
-				.basePipelineHandle = VK_NULL_HANDLE,
-			})
+			vk::GraphicsPipelineCreateInfo()
+				.setStages(shaderStages)
+				.setPVertexInputState(&vertexInputInfo)
+				.setPInputAssemblyState(&inputAssembly)
+				.setPViewportState(&viewportState)
+				.setPRasterizationState(&rasterizer)
+				.setPMultisampleState(&multisampling)
+				.setPDepthStencilState(&depthStencil)
+				.setPColorBlendState(&colorBlending)
+				.setPDynamicState(&dynamicState)
+				.setLayout(pipelineLayout)
+				.setRenderPass(renderPass)
+				.setSubpass(0)
+				.setBasePipelineHandle(vk::Pipeline())
 		);
 		obj = device.createGraphicsPipelines(
 			vk::PipelineCache{},
@@ -1716,11 +1684,9 @@ public:
 			commandPool = std::make_unique<VulkanCommandPool>(
 				device,
 				graphicsQueue,
-				vk::CommandPoolCreateInfo(VkCommandPoolCreateInfo{
-					.sType = (VkStructureType)vk::StructureType::eCommandPoolCreateInfo,
-					.flags = (VkCommandPoolCreateFlags)vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
-					.queueFamilyIndex = queueFamilyIndices.graphicsFamily.value(),
-				})
+				vk::CommandPoolCreateInfo()
+					.setFlags(vk::CommandPoolCreateFlagBits::eResetCommandBuffer)
+					.setQueueFamilyIndex(queueFamilyIndices.graphicsFamily.value())
 			);
 		}
 		
@@ -1734,26 +1700,21 @@ public:
 		);
 
 		textureSampler = device.createSampler(
-			vk::SamplerCreateInfo(
-				VkSamplerCreateInfo{
-					.sType = (VkStructureType)vk::StructureType::eSamplerCreateInfo,
-					.magFilter = (VkFilter)vk::Filter::eLinear,
-					.minFilter = (VkFilter)vk::Filter::eLinear,
-					.mipmapMode = (VkSamplerMipmapMode)vk::SamplerMipmapMode::eLinear,
-					.addressModeU = (VkSamplerAddressMode)vk::SamplerAddressMode::eRepeat,
-					.addressModeV = (VkSamplerAddressMode)vk::SamplerAddressMode::eRepeat,
-					.addressModeW = (VkSamplerAddressMode)vk::SamplerAddressMode::eRepeat,
-					.mipLodBias = 0,
-					.anisotropyEnable = VK_TRUE,
-					.maxAnisotropy = physicalDevice.getProperties().limits.maxSamplerAnisotropy,
-					.compareEnable = VK_FALSE,
-					.compareOp = (VkCompareOp)vk::CompareOp::eAlways,
-					.minLod = 0,
-					.maxLod = static_cast<float>(mipLevels),
-					.borderColor = (VkBorderColor)vk::BorderColor::eIntOpaqueBlack,
-					.unnormalizedCoordinates = VK_FALSE,
-				}
-			)
+			vk::SamplerCreateInfo()
+				.setMagFilter(vk::Filter::eLinear)
+				.setMinFilter(vk::Filter::eLinear)
+				.setMipmapMode(vk::SamplerMipmapMode::eLinear)
+				.setAddressModeU(vk::SamplerAddressMode::eRepeat)
+				.setAddressModeV(vk::SamplerAddressMode::eRepeat)
+				.setAddressModeW(vk::SamplerAddressMode::eRepeat)
+				.setAnisotropyEnable(true)
+				.setMaxAnisotropy(physicalDevice.getProperties().limits.maxSamplerAnisotropy)
+				.setCompareEnable(false)
+				.setCompareOp(vk::CompareOp::eAlways)
+				.setMinLod(0)
+				.setMaxLod((float)mipLevels)
+				.setBorderColor(vk::BorderColor::eIntOpaqueBlack)
+				.setUnnormalizedCoordinates(false)
 		);
 
 		loadModel();
@@ -1938,29 +1899,27 @@ protected:
 			(*commandPool)()
 		);
 
-		auto barrier = vk::ImageMemoryBarrier(VkImageMemoryBarrier{
-			.sType = (VkStructureType)vk::StructureType::eImageMemoryBarrier,
-			.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-			.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-			.image = (VkImage)image,
-			.subresourceRange = {
-				.aspectMask = (VkImageAspectFlags)vk::ImageAspectFlagBits::eColor,
-				.levelCount = 1,
-				.baseArrayLayer = 0,
-				.layerCount = 1,
-			},
-		});
+		auto barrier = vk::ImageMemoryBarrier()
+			.setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+			.setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+			.setImage(image)
+			.setSubresourceRange(
+				vk::ImageSubresourceRange()
+					.setAspectMask(vk::ImageAspectFlagBits::eColor)
+					.setLevelCount(1)
+					.setLayerCount(1)
+			);
 		
 		int32_t mipWidth = texWidth;
 		int32_t mipHeight = texHeight;
 
 		for (uint32_t i = 1; i < mipLevels; i++) {
-			barrier.subresourceRange.baseMipLevel = i - 1;
-			barrier.oldLayout = vk::ImageLayout::eTransferDstOptimal;
-			barrier.newLayout = vk::ImageLayout::eTransferSrcOptimal;
-			barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
-			barrier.dstAccessMask = vk::AccessFlagBits::eTransferRead;
-
+			barrier.subresourceRange.setBaseMipLevel(i - 1);
+			barrier
+				.setOldLayout(vk::ImageLayout::eTransferDstOptimal)
+				.setNewLayout(vk::ImageLayout::eTransferSrcOptimal)
+				.setSrcAccessMask(vk::AccessFlagBits::eTransferWrite)
+				.setDstAccessMask(vk::AccessFlagBits::eTransferRead);
 			commandBuffer().pipelineBarrier(
 				vk::PipelineStageFlagBits::eTransfer,
 				vk::PipelineStageFlagBits::eTransfer,
@@ -1970,32 +1929,31 @@ protected:
 				barrier
 			);
 
-			auto blit = vk::ImageBlit(VkImageBlit{
-				.srcSubresource = {
-					.aspectMask = (VkImageAspectFlags)vk::ImageAspectFlagBits::eColor,
-					.mipLevel = i - 1,
-					.baseArrayLayer = 0,
-					.layerCount = 1,
-				},
-				.srcOffsets = {
-					{0, 0, 0},
-					{mipWidth, mipHeight, 1},
-				},
-				.dstSubresource = {
-					.aspectMask = (VkImageAspectFlags)vk::ImageAspectFlagBits::eColor,
-					.mipLevel = i,
-					.baseArrayLayer = 0,
-					.layerCount = 1,
-				},
-				.dstOffsets = {
-					{0, 0, 0},
-					{
+			auto blit = vk::ImageBlit()
+				.setSrcSubresource(
+					vk::ImageSubresourceLayers()
+						.setAspectMask(vk::ImageAspectFlagBits::eColor)
+						.setMipLevel(i - 1)
+						.setLayerCount(1)
+				)
+				.setSrcOffsets(Common::make_array(
+					vk::Offset3D(),
+					vk::Offset3D(mipWidth, mipHeight, 1)
+				))
+				.setDstSubresource(
+					vk::ImageSubresourceLayers()
+						.setAspectMask(vk::ImageAspectFlagBits::eColor)
+						.setMipLevel(i)
+						.setLayerCount(1)
+				)
+				.setDstOffsets(Common::make_array(
+					vk::Offset3D(),
+					vk::Offset3D(
 						mipWidth > 1 ? mipWidth / 2 : 1,
 						mipHeight > 1 ? mipHeight / 2 : 1,
-						1,
-					},
-				},
-			});
+						1
+					)
+				));
 			
 			commandBuffer().blitImage(
 				image,
