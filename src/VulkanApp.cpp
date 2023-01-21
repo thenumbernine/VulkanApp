@@ -220,7 +220,7 @@ struct VulkanInstance {
 		// vkCreateInstance needs extensions
 		auto extensions = getRequiredExtensions(app, enableValidationLayers);
 
-		return std::make_unique<vk::raii::Instance>(
+		return vk::raii::Instance(
 			ctx,
 			vk::InstanceCreateInfo()
 				.setPApplicationInfo(&appInfo)
@@ -256,9 +256,7 @@ protected:
 
 struct VulkanPhysicalDevice {
 	// used by the application for specific physical device querying (should be a subclass of the general vk::PhysicalDevice)
-	static 
-	std::unique_ptr<vk::raii::PhysicalDevice>
-	create(
+	static auto create(
 		vk::raii::Instance const & instance,
 		vk::raii::SurfaceKHR const & surface,
 		std::vector<char const *> const & deviceExtensions
@@ -282,7 +280,7 @@ struct VulkanPhysicalDevice {
 				// so i'll make the source a uique_ptr
 				// but then that means i have to reutnr a make_unique....... 
 				// hmm.......
-				return std::make_unique<vk::raii::PhysicalDevice>(physDev);
+				return physDev;
 			}
 		}
 
@@ -1405,19 +1403,26 @@ protected:
 
 	::SDLApp::SDLApp const * app = {};	// points back to the owner
 
-#if 0	// not working on my vulkan implementation
+	//this is used by instance, so must go above instance
+#if 0	// extension not found on my vulkan implementation
 	static constexpr bool const enableValidationLayers = true;
 #else
 	static constexpr bool const enableValidationLayers = false;
 #endif
 
+	//this is used by physicalDevice, so has to go above physicalDevice
+protected:
+	std::vector<char const *> const deviceExtensions = {
+		VK_KHR_SWAPCHAIN_EXTENSION_NAME
+	};
+
+
 	vk::raii::Context ctx;				// hmm, in raii but not in non-raii oop c++ hpp?
-	std::unique_ptr<vk::raii::Instance> instance;
+	vk::raii::Instance instance;
 	std::unique_ptr<vk::raii::DebugUtilsMessengerEXT> debug;	// optional
-	std::unique_ptr<vk::raii::SurfaceKHR> surface;
+	vk::raii::SurfaceKHR surface;
+	vk::raii::PhysicalDevice physicalDevice;
 	
-	//ok now we're at the point where we are recreating objects dependent on physicalDevice so
-	std::unique_ptr<vk::raii::PhysicalDevice> physicalDevice;
 	vk::SampleCountFlagBits msaaSamples = vk::SampleCountFlagBits::e1;
 
 	std::unique_ptr<vk::raii::Device> device;
@@ -1463,28 +1468,23 @@ protected:
 	bool framebufferResized = {};
 public:
 	void setFramebufferResized() { framebufferResized = true; }
-protected:
-
-	std::vector<char const *> const deviceExtensions = {
-		VK_KHR_SWAPCHAIN_EXTENSION_NAME
-	};
-
 protected:	
 public:
-	VulkanCommon(::SDLApp::SDLApp const * const app_)
-	: app(app_) {
-		if (enableValidationLayers && !checkValidationLayerSupport()) {
-			throw Common::Exception() << "validation layers requested, but not available!";
-		}
-
-		ctx = vk::raii::Context();
-
-		// hmm, maybe instance should be a shared_ptr and then passed to debug, surface, and physicalDevice ?
-		instance = VulkanInstance::create(ctx, app, enableValidationLayers);
-		
-		if (enableValidationLayers) {
-			debug = std::make_unique<vk::raii::DebugUtilsMessengerEXT>(
-				*instance,
+	VulkanCommon(
+		::SDLApp::SDLApp const * const app_
+	) : app(app_),
+		instance([this](){
+			if (enableValidationLayers && !checkValidationLayerSupport()) {
+				throw Common::Exception() << "validation layers requested, but not available!";
+			}
+			
+			// hmm, maybe instance should be a shared_ptr and then passed to debug, surface, and physicalDevice ?
+			return VulkanInstance::create(ctx, app, enableValidationLayers);
+		}()),
+		debug(!enableValidationLayers 
+			? std::unique_ptr<vk::raii::DebugUtilsMessengerEXT>{} 
+			: std::make_unique<vk::raii::DebugUtilsMessengerEXT>(
+				instance,
 				vk::DebugUtilsMessengerCreateInfoEXT()
 					.setMessageSeverity(
 						vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose 
@@ -1508,36 +1508,35 @@ public:
 							return VK_FALSE;
 						}
 					)
-			);
-		}
-		
-		{
+			)
+		),
+		surface([this](){
 			VkSurfaceKHR h = {};
-			SDL_VULKAN_SAFE(SDL_Vulkan_CreateSurface, app->getWindow(), **instance, &h);
-			surface = std::make_unique<vk::raii::SurfaceKHR>(*instance, h);	
-		}
-
-		physicalDevice = VulkanPhysicalDevice::create(
-			*instance,
-			*surface,
+			SDL_VULKAN_SAFE(SDL_Vulkan_CreateSurface, app->getWindow(), *instance, &h);
+			return vk::raii::SurfaceKHR(instance, h);
+		}()),
+		physicalDevice(VulkanPhysicalDevice::create(
+			instance,
+			surface,
 			deviceExtensions
-		);
-		msaaSamples = VulkanPhysicalDevice::getMaxUsableSampleCount(*physicalDevice);
+		))
+	{
+		msaaSamples = VulkanPhysicalDevice::getMaxUsableSampleCount(physicalDevice);
 		std::tie(device, graphicsQueue, presentQueue) = VulkanDevice::create(
-			*physicalDevice,
-			*surface,
+			physicalDevice,
+			surface,
 			deviceExtensions,
 			enableValidationLayers
 		);
 		swapChain = std::make_unique<VulkanSwapChain>(
 			app->getScreenSize(),
-			*physicalDevice,
+			physicalDevice,
 			*device,
-			*surface,
+			surface,
 			msaaSamples
 		);
 		graphicsPipeline = std::make_unique<VulkanGraphicsPipeline>(
-			*physicalDevice,
+			physicalDevice,
 			*device,
 			swapChain->getRenderPass(),
 			msaaSamples
@@ -1545,8 +1544,8 @@ public:
 		
 		{
 			auto queueFamilyIndices = VulkanPhysicalDevice::findQueueFamilies(
-				*physicalDevice,
-				*surface
+				physicalDevice,
+				surface
 			);
 			commandPool = std::make_unique<VulkanCommandPool>(
 				*device,
@@ -1576,7 +1575,7 @@ public:
 				.setAddressModeV(vk::SamplerAddressMode::eRepeat)
 				.setAddressModeW(vk::SamplerAddressMode::eRepeat)
 				.setAnisotropyEnable(true)
-				.setMaxAnisotropy(physicalDevice->getProperties().limits.maxSamplerAnisotropy)
+				.setMaxAnisotropy(physicalDevice.getProperties().limits.maxSamplerAnisotropy)
 				.setCompareEnable(false)
 				.setCompareOp(vk::CompareOp::eAlways)
 				.setMinLod(0)
@@ -1589,7 +1588,7 @@ public:
 		
 		std::tie(vertexBuffer, vertexBufferMemory) 
 		= VulkanDeviceMemoryBuffer::makeBufferFromStaged(
-			*physicalDevice,
+			physicalDevice,
 			*device,
 			*commandPool,
 			vertices.data(),
@@ -1598,7 +1597,7 @@ public:
 
 		std::tie(indexBuffer, indexBufferMemory)
 		= VulkanDeviceMemoryBuffer::makeBufferFromStaged(
-			*physicalDevice,
+			physicalDevice,
 			*device,
 			*commandPool,
 			indices.data(),
@@ -1608,7 +1607,7 @@ public:
 		for (size_t i = 0; i < maxFramesInFlight; i++) {
 			uniformBuffers.push_back(
 				VulkanDeviceMemoryBuffer::create(
-					*physicalDevice,
+					physicalDevice,
 					*device,
 					sizeof(UniformBufferObject),
 					vk::BufferUsageFlagBits::eUniformBuffer,
@@ -1650,26 +1649,6 @@ public:
 		initSyncObjects();
 	}
 
-protected:
-	// this is out of place
-	static bool checkValidationLayerSupport() {
-		auto availableLayers = vk::enumerateInstanceLayerProperties();
-		for (char const * const layerName : validationLayers) {
-			bool layerFound = false;
-			for (auto const & layerProperties : availableLayers) {
-				// hmm, why does vulkan hpp use array<char> instead of string?
-				if (!strcmp(layerName, layerProperties.layerName.data())) {
-					layerFound = true;
-					break;
-				}
-			}
-			if (!layerFound) {
-				return false;
-			}
-		}
-		return true;
-	}
-
 public:
 	~VulkanCommon() {
 		// vector of unique pointers, can't use `= {}`, gotta use `.clear()`
@@ -1698,12 +1677,28 @@ public:
 		commandPool = {};
 		
 		device = {};
-		physicalDevice = {};
-		surface = {};
-		debug = {};
-		instance = {};
-		ctx = {};
 	}
+
+protected:
+	// this is out of place
+	static bool checkValidationLayerSupport() {
+		auto availableLayers = vk::enumerateInstanceLayerProperties();
+		for (char const * const layerName : validationLayers) {
+			bool layerFound = false;
+			for (auto const & layerProperties : availableLayers) {
+				// hmm, why does vulkan hpp use array<char> instead of string?
+				if (!strcmp(layerName, layerProperties.layerName.data())) {
+					layerFound = true;
+					break;
+				}
+			}
+			if (!layerFound) {
+				return false;
+			}
+		}
+		return true;
+	}
+
 
 protected:
 	void createTextureImage() {
@@ -1738,7 +1733,7 @@ protected:
 	
 		std::tie(textureImage, textureImageMemory) 
 		= VulkanDeviceMemoryImage::makeTextureFromStaged(
-			*physicalDevice,
+			physicalDevice,
 			*device,
 			*commandPool,
 			srcData,
@@ -1765,7 +1760,7 @@ protected:
 		uint32_t mipLevels
 	) {
 		// Check if image format supports linear blitting
-		auto formatProperties = physicalDevice->getFormatProperties(imageFormat);
+		auto formatProperties = physicalDevice.getFormatProperties(imageFormat);
 
 		if (!(formatProperties.optimalTilingFeatures & vk::FormatFeatureFlagBits::eSampledImageFilterLinear)) {
 			throw Common::Exception() << "texture image format does not support linear blitting!";
@@ -1931,9 +1926,9 @@ protected:
 		device->waitIdle();
 		swapChain = std::make_unique<VulkanSwapChain>(
 			app->getScreenSize(),
-			*physicalDevice,
+			physicalDevice,
 			*device,
-			*surface,
+			surface,
 			msaaSamples
 		);
 	}
