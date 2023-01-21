@@ -580,32 +580,31 @@ namespace VulkanDevice {
 		auto indices = ThisVulkanPhysicalDevice::findQueueFamilies(physicalDevice, surface);
 
 		auto queuePriorities = Common::make_array<float>(1);
-		std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
+		auto queueCreateInfos = std::vector<vk::DeviceQueueCreateInfo>{};
 		for (uint32_t queueFamily : std::set<uint32_t>{
 			indices.graphicsFamily.value(),
 			indices.presentFamily.value(),
 		}) {
-			queueCreateInfos.push_back(VkDeviceQueueCreateInfo{
-				.sType = (VkStructureType)vk::StructureType::eDeviceQueueCreateInfo,
-				.queueFamilyIndex = queueFamily,
-				.queueCount = (uint32_t)queuePriorities.size(),
-				.pQueuePriorities = queuePriorities.data(),
-			});
+			queueCreateInfos.push_back(
+				vk::DeviceQueueCreateInfo()
+					.setQueueFamilyIndex(queueFamily)
+					.setQueuePriorities(queuePriorities)
+			);
 		}
 
-		auto deviceFeatures = VkPhysicalDeviceFeatures{
-			.samplerAnisotropy = VK_TRUE,
-		};
-		auto device = vk::Device(physicalDevice.createDevice(VkDeviceCreateInfo{
-			.sType = (VkStructureType)vk::StructureType::eDeviceCreateInfo,
-			.queueCreateInfoCount = (uint32_t)queueCreateInfos.size(),
-			.pQueueCreateInfos = queueCreateInfos.data(),
-			.enabledLayerCount = enableValidationLayers ? (uint32_t)validationLayers.size() : 0,
-			.ppEnabledLayerNames = enableValidationLayers ? validationLayers.data() : nullptr,
-			.enabledExtensionCount = (uint32_t)deviceExtensions.size(),
-			.ppEnabledExtensionNames = deviceExtensions.data(),
-			.pEnabledFeatures = &deviceFeatures,
-		}));
+		auto deviceFeatures = vk::PhysicalDeviceFeatures()
+			.setSamplerAnisotropy(true);
+		auto thisValidationLayers = std::vector<char const *>();
+		if (enableValidationLayers) {
+			thisValidationLayers = validationLayers;
+		}
+		auto device = physicalDevice.createDevice(
+			vk::DeviceCreateInfo()
+				.setQueueCreateInfos(queueCreateInfos)
+				.setPEnabledLayerNames(thisValidationLayers)
+				.setPEnabledExtensionNames(deviceExtensions)
+				.setPEnabledFeatures(&deviceFeatures)
+		);
 		auto graphicsQueue = device.getQueue(indices.graphicsFamily.value(), 0);
 		auto presentQueue = device.getQueue(indices.presentFamily.value(), 0);
 		return std::make_tuple(device, graphicsQueue, presentQueue);
@@ -620,86 +619,75 @@ struct ThisVulkanRenderPass  {
 		vk::SampleCountFlagBits msaaSamples
 	) {
 		auto attachments = Common::make_array(
-			VkAttachmentDescription{	//colorAttachment
-				.format = (VkFormat)swapChainImageFormat,
-				.samples = (VkSampleCountFlagBits)msaaSamples,
-				.loadOp = (VkAttachmentLoadOp)vk::AttachmentLoadOp::eClear,
-				.storeOp = (VkAttachmentStoreOp)vk::AttachmentStoreOp::eStore,
-				.stencilLoadOp = (VkAttachmentLoadOp)vk::AttachmentLoadOp::eDontCare,
-				.stencilStoreOp = (VkAttachmentStoreOp)vk::AttachmentStoreOp::eDontCare,
-				.initialLayout = (VkImageLayout)vk::ImageLayout::eUndefined,
-				.finalLayout = (VkImageLayout)vk::ImageLayout::eColorAttachmentOptimal,
-			},
-			VkAttachmentDescription{	//depthAttachment
-				.format = (VkFormat)ThisVulkanPhysicalDevice::findDepthFormat(physicalDevice),
-				.samples = (VkSampleCountFlagBits)msaaSamples,
-				.loadOp = (VkAttachmentLoadOp)vk::AttachmentLoadOp::eClear,
-				.storeOp = (VkAttachmentStoreOp)vk::AttachmentStoreOp::eDontCare,
-				.stencilLoadOp = (VkAttachmentLoadOp)vk::AttachmentLoadOp::eDontCare,
-				.stencilStoreOp = (VkAttachmentStoreOp)vk::AttachmentStoreOp::eDontCare,
-				.initialLayout = (VkImageLayout)vk::ImageLayout::eUndefined,
-				.finalLayout = (VkImageLayout)vk::ImageLayout::eDepthStencilAttachmentOptimal,
-			},
-			VkAttachmentDescription{	//colorAttachmentResolve
-				.format = (VkFormat)swapChainImageFormat,
-				.samples = (VkSampleCountFlagBits)vk::SampleCountFlagBits::e1,
-				.loadOp = (VkAttachmentLoadOp)vk::AttachmentLoadOp::eDontCare,
-				.storeOp = (VkAttachmentStoreOp)vk::AttachmentStoreOp::eStore,
-				.stencilLoadOp = (VkAttachmentLoadOp)vk::AttachmentLoadOp::eDontCare,
-				.stencilStoreOp = (VkAttachmentStoreOp)vk::AttachmentStoreOp::eDontCare,
-				.initialLayout = (VkImageLayout)vk::ImageLayout::eUndefined,
-				.finalLayout = (VkImageLayout)vk::ImageLayout::ePresentSrcKHR,
-			}
+			vk::AttachmentDescription()//colorAttachment
+				.setFormat(swapChainImageFormat)
+				.setSamples(msaaSamples)
+				.setLoadOp(vk::AttachmentLoadOp::eClear)
+				.setStoreOp(vk::AttachmentStoreOp::eStore)
+				.setStencilLoadOp(vk::AttachmentLoadOp::eDontCare)
+				.setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
+				.setInitialLayout(vk::ImageLayout::eUndefined)
+				.setFinalLayout(vk::ImageLayout::eColorAttachmentOptimal),
+			vk::AttachmentDescription()//depthAttachment
+				.setFormat(ThisVulkanPhysicalDevice::findDepthFormat(physicalDevice))
+				.setSamples(msaaSamples)
+				.setLoadOp(vk::AttachmentLoadOp::eClear)
+				.setStoreOp(vk::AttachmentStoreOp::eDontCare)
+				.setStencilLoadOp(vk::AttachmentLoadOp::eDontCare)
+				.setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
+				.setInitialLayout(vk::ImageLayout::eUndefined)
+				.setFinalLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal),
+			vk::AttachmentDescription()//colorAttachmentResolve
+				.setFormat(swapChainImageFormat)
+				.setSamples(vk::SampleCountFlagBits::e1)
+				.setLoadOp(vk::AttachmentLoadOp::eDontCare)
+				.setStoreOp(vk::AttachmentStoreOp::eStore)
+				.setStencilLoadOp(vk::AttachmentLoadOp::eDontCare)
+				.setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
+				.setInitialLayout(vk::ImageLayout::eUndefined)
+				.setFinalLayout(vk::ImageLayout::ePresentSrcKHR)
 		);
-		auto colorAttachmentRef = VkAttachmentReference{
-			.attachment = 0,
-			.layout = (VkImageLayout)vk::ImageLayout::eColorAttachmentOptimal,
-		};
-		auto depthAttachmentRef = VkAttachmentReference{
-			.attachment = 1,
-			.layout = (VkImageLayout)vk::ImageLayout::eDepthStencilAttachmentOptimal,
-		};
-		auto colorAttachmentResolveRef = VkAttachmentReference{
-			.attachment = 2,
-			.layout = (VkImageLayout)vk::ImageLayout::eColorAttachmentOptimal,
-		};
+		auto colorAttachmentRef = vk::AttachmentReference()
+			.setAttachment(0)
+			.setLayout(vk::ImageLayout::eColorAttachmentOptimal);
+		auto depthAttachmentRef = vk::AttachmentReference()
+			.setAttachment(1)
+			.setLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal);
+		auto colorAttachmentResolveRef = vk::AttachmentReference()
+			.setAttachment(2)
+			.setLayout(vk::ImageLayout::eColorAttachmentOptimal);
 		auto subpasses = Common::make_array(
-			VkSubpassDescription{
-				.pipelineBindPoint = (VkPipelineBindPoint)vk::PipelineBindPoint::eGraphics,
-				.colorAttachmentCount = 1,
-				.pColorAttachments = &colorAttachmentRef,
-				.pResolveAttachments = &colorAttachmentResolveRef,
-				.pDepthStencilAttachment = &depthAttachmentRef,
-			}
+			vk::SubpassDescription()
+				.setPipelineBindPoint(vk::PipelineBindPoint::eGraphics)
+				.setColorAttachmentCount(1)
+				.setPColorAttachments(&colorAttachmentRef)
+				.setPResolveAttachments(&colorAttachmentResolveRef)
+				.setPDepthStencilAttachment(&depthAttachmentRef)
 		);
 		auto dependencies = Common::make_array(
-			VkSubpassDependency{
-				.srcSubpass = VK_SUBPASS_EXTERNAL,
-				.dstSubpass = 0,
-				.srcStageMask = (VkPipelineStageFlags)(
+			vk::SubpassDependency()
+				.setSrcSubpass(VK_SUBPASS_EXTERNAL)
+				.setDstSubpass(0)
+				.setSrcStageMask(
 					vk::PipelineStageFlagBits::eColorAttachmentOutput |
 					vk::PipelineStageFlagBits::eEarlyFragmentTests
-				),
-				.dstStageMask = (VkPipelineStageFlags)(
+				)
+				.setDstStageMask(
 					vk::PipelineStageFlagBits::eColorAttachmentOutput |
 					vk::PipelineStageFlagBits::eEarlyFragmentTests
-				),
-				.srcAccessMask = 0,
-				.dstAccessMask = (VkAccessFlags)(
+				)
+				.setSrcAccessMask({})
+				.setDstAccessMask(
 					vk::AccessFlagBits::eColorAttachmentWrite |
 					vk::AccessFlagBits::eDepthStencilAttachmentWrite
-				),
-			}
+				)
 		);
-		return device.createRenderPass(vk::RenderPassCreateInfo(VkRenderPassCreateInfo{
-			.sType = (VkStructureType)vk::StructureType::eRenderPassCreateInfo,
-			.attachmentCount = (uint32_t)attachments.size(),
-			.pAttachments = attachments.data(),
-			.subpassCount = (uint32_t)subpasses.size(),
-			.pSubpasses = subpasses.data(),
-			.dependencyCount = (uint32_t)dependencies.size(),
-			.pDependencies = dependencies.data(),
-		}));
+		return device.createRenderPass(
+			vk::RenderPassCreateInfo()
+				.setAttachments(attachments)
+				.setSubpasses(subpasses)
+				.setDependencies(dependencies)
+		);
 	}
 };
 
@@ -724,32 +712,27 @@ public:
 		commandPool(commandPool_)
 	{
 		cmd = device.allocateCommandBuffers(
-			vk::CommandBufferAllocateInfo(
-				VkCommandBufferAllocateInfo{
-					.sType = (VkStructureType)vk::StructureType::eCommandBufferAllocateInfo,
-					.commandPool = commandPool,
-					.level = (VkCommandBufferLevel)vk::CommandBufferLevel::ePrimary,
-					.commandBufferCount = 1,
-				}
-			)
+			vk::CommandBufferAllocateInfo()
+				.setCommandPool(commandPool)
+				.setLevel(vk::CommandBufferLevel::ePrimary)
+				.setCommandBufferCount(1)
 		)[0];
 		// end part that matches
 		// and this part kinda matches the start of 'recordCommandBuffer'
-		cmd.begin(vk::CommandBufferBeginInfo(VkCommandBufferBeginInfo{
-			.sType = (VkStructureType)vk::StructureType::eCommandBufferBeginInfo,
-			.flags = (VkCommandBufferUsageFlags)vk::CommandBufferUsageFlagBits::eOneTimeSubmit,
-		}));
+		cmd.begin(
+			vk::CommandBufferBeginInfo()
+				.setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit)
+		);
 		//end part that matches
 	}
 	
 	~VulkanSingleTimeCommand() {
 		cmd.end();
-		auto cmds = Common::make_array((VkCommandBuffer)cmd);
-		queue.submit(vk::SubmitInfo(VkSubmitInfo{
-			.sType = (VkStructureType)vk::StructureType::eSubmitInfo,
-			.commandBufferCount = (uint32_t)cmds.size(),
-			.pCommandBuffers = cmds.data(),
-		}));
+		auto cmds = Common::make_array(cmd);
+		queue.submit(
+			vk::SubmitInfo()
+				.setCommandBuffers(cmds)
+		);
 		queue.waitIdle();
 		device.freeCommandBuffers(commandPool, cmd);
 	}
@@ -763,7 +746,7 @@ protected:
 	vk::Device const device;
 	vk::Queue const graphicsQueue;
 public:
-	auto operator()() const { return (VkCommandPool)commandPool; }
+	auto const & operator()() const { return commandPool; }
 	
 	~VulkanCommandPool() {
 		device.destroyCommandPool(commandPool);
@@ -781,8 +764,8 @@ public:
 	//copies based on the graphicsQueue
 	// used by makeBufferFromStaged
 	void copyBuffer(
-		vk::Buffer srcBuffer,	//staging VkBuffer
-		vk::Buffer dstBuffer,	//dest VkBuffer
+		vk::Buffer srcBuffer,	//staging vk::Buffer
+		vk::Buffer dstBuffer,	//dest vk::Buffer
 		vk::DeviceSize size
 	) const {
 		VulkanSingleTimeCommand(
@@ -822,7 +805,7 @@ public:
 	}
 
 	void transitionImageLayout(
-		VkImage image,
+		vk::Image image,
 		vk::ImageLayout oldLayout,
 		vk::ImageLayout newLayout,
 		uint32_t mipLevels
@@ -893,27 +876,23 @@ namespace VulkanDeviceMakeFromStagingBuffer {
 		size_t bufferSize
 	) {
 		auto buffer = device.createBuffer(
-			vk::BufferCreateInfo(VkBufferCreateInfo{
-				.size = bufferSize,
-				.usage = (VkBufferUsageFlags)vk::BufferUsageFlagBits::eTransferSrc,
-				.sharingMode = (VkSharingMode)vk::SharingMode::eExclusive,
-			})
+			vk::BufferCreateInfo()
+				.setSize(bufferSize)
+				.setUsage(vk::BufferUsageFlagBits::eTransferSrc)
+				.setSharingMode(vk::SharingMode::eExclusive)
 		);
 		auto memRequirements = device.getBufferMemoryRequirements(buffer);
-		auto mem = device.allocateMemory(vk::MemoryAllocateInfo(VkMemoryAllocateInfo{
-			.sType = (VkStructureType)vk::StructureType::eMemoryAllocateInfo,
-			.allocationSize = memRequirements.size,
-			.memoryTypeIndex = ThisVulkanPhysicalDevice::findMemoryType(
-				physicalDevice,
-				memRequirements.memoryTypeBits,
-				vk::MemoryPropertyFlagBits::eHostVisible
-				| vk::MemoryPropertyFlagBits::eHostCoherent
-			),
-		}));
-		device.bindBufferMemory(
-			buffer,
-			mem,
-			0);
+		auto mem = device.allocateMemory(
+			vk::MemoryAllocateInfo()
+				.setAllocationSize(memRequirements.size)
+				.setMemoryTypeIndex(ThisVulkanPhysicalDevice::findMemoryType(
+					physicalDevice,
+					memRequirements.memoryTypeBits,
+					vk::MemoryPropertyFlagBits::eHostVisible
+					| vk::MemoryPropertyFlagBits::eHostCoherent
+				))
+		);
+		device.bindBufferMemory(buffer, mem, 0);
 
 		void * dstData = {};
 		vkMapMemory(
@@ -941,28 +920,23 @@ namespace VulkanDeviceMemoryBuffer  {
 		vk::MemoryPropertyFlags properties
 	) {
 		auto buffer = device.createBuffer(
-			vk::BufferCreateInfo(VkBufferCreateInfo{
-				.flags = (VkBufferCreateFlags)vk::BufferCreateFlags(),
-				.size = size,
-				.usage = (VkBufferUsageFlags)usage,
-				.sharingMode = (VkSharingMode)vk::SharingMode::eExclusive,
-			})
+			vk::BufferCreateInfo()
+				.setFlags(vk::BufferCreateFlags())
+				.setSize(size)
+				.setUsage(usage)
+				.setSharingMode(vk::SharingMode::eExclusive)
 		);
-		
 		auto memRequirements = device.getBufferMemoryRequirements(buffer);
-		auto memory = device.allocateMemory(vk::MemoryAllocateInfo(VkMemoryAllocateInfo{
-			.sType = (VkStructureType)vk::StructureType::eMemoryAllocateInfo,
-			.allocationSize = memRequirements.size,
-			.memoryTypeIndex = ThisVulkanPhysicalDevice::findMemoryType(
-				physicalDevice,
-				memRequirements.memoryTypeBits,
-				properties
-			),
-		}));
-		device.bindBufferMemory(
-			buffer,
-			memory,
-			0);
+		auto memory = device.allocateMemory(
+			vk::MemoryAllocateInfo()
+				.setAllocationSize(memRequirements.size)
+				.setMemoryTypeIndex(ThisVulkanPhysicalDevice::findMemoryType(
+					physicalDevice,
+					memRequirements.memoryTypeBits,
+					properties
+				))
+		);
+		device.bindBufferMemory(buffer, memory, 0);
 		return std::make_pair(buffer, memory);
 	}
 
@@ -1024,34 +998,30 @@ namespace VulkanDeviceMemoryImage {
 		vk::MemoryPropertyFlags properties
 	) {
 		// TODO this as a ctor that just calls Super
-		auto image = device.createImage(vk::ImageCreateInfo(VkImageCreateInfo{
-			.sType = (VkStructureType)vk::StructureType::eImageCreateInfo,
-			.imageType = (VkImageType)vk::ImageType::e2D,
-			.format = (VkFormat)format,
-			.extent = {
-				.width = width,
-				.height = height,
-				.depth = 1,
-			},
-			.mipLevels = mipLevels,
-			.arrayLayers = 1,
-			.samples = (VkSampleCountFlagBits)numSamples,
-			.tiling = (VkImageTiling)tiling,
-			.usage = (VkImageUsageFlags)usage,
-			.sharingMode = (VkSharingMode)vk::SharingMode::eExclusive,
-			.initialLayout = (VkImageLayout)vk::ImageLayout::eUndefined,
-		}));
+		auto image = device.createImage(
+			vk::ImageCreateInfo()
+				.setImageType(vk::ImageType::e2D)
+				.setFormat(format)
+				.setExtent(vk::Extent3D(width, height, 1))
+				.setMipLevels(mipLevels)
+				.setArrayLayers(1)
+				.setSamples(numSamples)
+				.setTiling(tiling)
+				.setUsage(usage)
+				.setSharingMode(vk::SharingMode::eExclusive)
+				.setInitialLayout(vk::ImageLayout::eUndefined)
+		);
 
 		auto memRequirements = device.getImageMemoryRequirements(image);
-		auto imageMemory = device.allocateMemory(vk::MemoryAllocateInfo(VkMemoryAllocateInfo{
-			.sType = (VkStructureType)vk::StructureType::eMemoryAllocateInfo,
-			.allocationSize = memRequirements.size,
-			.memoryTypeIndex = ThisVulkanPhysicalDevice::findMemoryType(
-				physicalDevice,
-				memRequirements.memoryTypeBits,
-				properties
-			),
-		}));
+		auto imageMemory = device.allocateMemory(
+			vk::MemoryAllocateInfo()
+				.setAllocationSize(memRequirements.size)
+				.setMemoryTypeIndex(ThisVulkanPhysicalDevice::findMemoryType(
+					physicalDevice,
+					memRequirements.memoryTypeBits,
+					properties
+				))
+		);
 		device.bindImageMemory(image, imageMemory, 0);
 		return std::make_pair(image, imageMemory);
 	}
@@ -1199,31 +1169,28 @@ public:
 			imageCount = std::min(imageCount, swapChainSupport.capabilities.maxImageCount);
 		}
 
-		auto createInfo = VkSwapchainCreateInfoKHR{
-			.sType = (VkStructureType)vk::StructureType::eSwapchainCreateInfoKHR,
-			.surface = surface,
-			.minImageCount = imageCount,
-			.imageFormat = (VkFormat)surfaceFormat.format,
-			.imageColorSpace = (VkColorSpaceKHR)surfaceFormat.colorSpace,
-			.imageExtent = extent,
-			.imageArrayLayers = 1,
-			.imageUsage = (VkImageUsageFlags)vk::ImageUsageFlagBits::eColorAttachment,
-			.preTransform = (VkSurfaceTransformFlagBitsKHR)swapChainSupport.capabilities.currentTransform,
-			.compositeAlpha = (VkCompositeAlphaFlagBitsKHR)vk::CompositeAlphaFlagBitsKHR::eOpaque,
-			.presentMode = (VkPresentModeKHR)presentMode,
-			.clipped = VK_TRUE,
-		};
+		auto createInfo = vk::SwapchainCreateInfoKHR()
+			.setSurface(surface)
+			.setMinImageCount(imageCount)
+			.setImageFormat(surfaceFormat.format)
+			.setImageColorSpace(surfaceFormat.colorSpace)
+			.setImageExtent(extent)
+			.setImageArrayLayers(1)
+			.setImageUsage(vk::ImageUsageFlagBits::eColorAttachment)
+			.setPreTransform(swapChainSupport.capabilities.currentTransform)
+			.setCompositeAlpha(vk::CompositeAlphaFlagBitsKHR::eOpaque)
+			.setPresentMode(presentMode)
+			.setClipped(true);
 		auto indices = ThisVulkanPhysicalDevice::findQueueFamilies(physicalDevice, surface);
 		auto queueFamilyIndices = Common::make_array<uint32_t>(
 			(uint32_t)indices.graphicsFamily.value(),
 			(uint32_t)indices.presentFamily.value()
 		);
 		if (indices.graphicsFamily != indices.presentFamily) {
-			createInfo.imageSharingMode = (VkSharingMode)vk::SharingMode::eConcurrent;
-			createInfo.queueFamilyIndexCount = (uint32_t)queueFamilyIndices.size();
-			createInfo.pQueueFamilyIndices = queueFamilyIndices.data();
+			createInfo.setImageSharingMode(vk::SharingMode::eConcurrent);
+			createInfo.setQueueFamilyIndices(queueFamilyIndices);
 		} else {
-			createInfo.imageSharingMode = (VkSharingMode)vk::SharingMode::eExclusive;
+			createInfo.setImageSharingMode(vk::SharingMode::eExclusive);
 		}
 		obj = device.createSwapchainKHR(createInfo);
 
@@ -1293,19 +1260,18 @@ public:
 		framebuffers.resize(imageViews.size());
 		for (size_t i = 0; i < imageViews.size(); i++) {
 			auto attachments = Common::make_array(
-				(VkImageView)colorImageView,
-				(VkImageView)depthImageView,
-				(VkImageView)imageViews[i]
+				colorImageView,
+				depthImageView,
+				imageViews[i]
 			);
-			framebuffers[i] = device.createFramebuffer(vk::FramebufferCreateInfo(VkFramebufferCreateInfo{
-				.sType = (VkStructureType)vk::StructureType::eFramebufferCreateInfo,
-				.renderPass = renderPass,
-				.attachmentCount = (uint32_t)attachments.size(),
-				.pAttachments = attachments.data(),
-				.width = extent.width,
-				.height = extent.height,
-				.layers = 1,
-			}));
+			framebuffers[i] = device.createFramebuffer(
+				vk::FramebufferCreateInfo()
+					.setRenderPass(renderPass)
+					.setAttachments(attachments)
+					.setWidth(extent.width)
+					.setHeight(extent.height)
+					.setLayers(1)
+			);
 		}
 	}
 
@@ -1316,19 +1282,18 @@ public:
 		vk::ImageAspectFlags aspectFlags,
 		uint32_t mipLevels
 	) {
-		return device.createImageView(vk::ImageViewCreateInfo(VkImageViewCreateInfo{
-			.sType = (VkStructureType)vk::StructureType::eImageViewCreateInfo,
-			.image = image,
-			.viewType = (VkImageViewType)vk::ImageViewType::e2D,
-			.format = (VkFormat)format,
-			.subresourceRange = {
-				.aspectMask = (VkImageAspectFlags)aspectFlags,
-				.baseMipLevel = 0,
-				.levelCount = mipLevels,
-				.baseArrayLayer = 0,
-				.layerCount = 1,
-			},
-		}));
+		return device.createImageView(
+			vk::ImageViewCreateInfo()
+				.setImage(image)
+				.setViewType(vk::ImageViewType::e2D)
+				.setFormat(format)
+				.setSubresourceRange(
+					vk::ImageSubresourceRange()
+						.setAspectMask(aspectFlags)
+						.setLevelCount(mipLevels)
+						.setLayerCount(1)
+				)
+		);
 	}
 
 protected:
@@ -1396,6 +1361,7 @@ protected:
 	vk::Pipeline obj;
 	vk::PipelineLayout pipelineLayout;
 	vk::DescriptorSetLayout descriptorSetLayout;
+	
 	//held:
 	vk::Device const device;				//held for dtor
 public:
@@ -1408,8 +1374,8 @@ public:
 
 	~VulkanGraphicsPipeline() {
 		device.destroyPipelineLayout(pipelineLayout);
-		device.destroyPipeline(obj);
 		device.destroyDescriptorSetLayout(descriptorSetLayout);
+		device.destroyPipeline(obj);
 	}
 
 	VulkanGraphicsPipeline(
@@ -1421,22 +1387,22 @@ public:
 		
 		// descriptorSetLayout is only used by graphicsPipeline
 		auto bindings = Common::make_array(
-			vk::DescriptorSetLayoutBinding(VkDescriptorSetLayoutBinding{	//uboLayoutBinding
-				.binding = 0,
-				.descriptorType = (VkDescriptorType)vk::DescriptorType::eUniformBuffer,
-				.descriptorCount = 1,
-				.stageFlags = (VkShaderStageFlags)vk::ShaderStageFlagBits::eVertex,
-			}),
-			vk::DescriptorSetLayoutBinding(VkDescriptorSetLayoutBinding{	//samplerLayoutBinding
-				.binding = 1,
-				.descriptorType = (VkDescriptorType)vk::DescriptorType::eCombinedImageSampler,
-				.descriptorCount = 1,
-				.stageFlags = (VkShaderStageFlags)vk::ShaderStageFlagBits::eFragment,
-			})
+			vk::DescriptorSetLayoutBinding()	//uboLayoutBinding
+				.setBinding(0)
+				.setDescriptorType(vk::DescriptorType::eUniformBuffer)
+				.setDescriptorCount(1)
+				.setStageFlags(vk::ShaderStageFlagBits::eVertex)
+			,
+			vk::DescriptorSetLayoutBinding()	//samplerLayoutBinding
+				.setBinding(1)
+				.setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
+				.setDescriptorCount(1)
+				.setStageFlags(vk::ShaderStageFlagBits::eFragment)
+			
 		);
 		descriptorSetLayout = device.createDescriptorSetLayout(
 			vk::DescriptorSetLayoutCreateInfo()
-			.setBindings(bindings)
+				.setBindings(bindings)
 		);
 
 		auto vertShaderModule = VulkanShaderModule::fromFile(
@@ -1644,12 +1610,7 @@ public:
 		
 		{
 			VkSurfaceKHR h = {};
-			SDL_VULKAN_SAFE(
-				SDL_Vulkan_CreateSurface,
-				app->getWindow(),
-				instance,
-				&h
-			);
+			SDL_VULKAN_SAFE(SDL_Vulkan_CreateSurface, app->getWindow(), instance, &h);
 			surface = vk::SurfaceKHR(h);	
 		}
 
@@ -1806,25 +1767,42 @@ protected:
 
 public:
 	~VulkanCommon() {
-		device.destroyDescriptorPool(descriptorPool);
-		device.freeMemory(vertexBufferMemory);
-		device.destroyBuffer(vertexBuffer);
-		device.freeMemory(indexBufferMemory);
-		device.destroyBuffer(indexBuffer);
-		for (auto & o : uniformBuffers) {
-			device.freeMemory(std::get<1>(o));
-			device.destroyBuffer(std::get<0>(o));
-		}
 
-		device.destroySampler(textureSampler);
-		device.destroyImageView(textureImageView);
-		device.freeMemory(textureImageMemory);
-		device.destroyImage(textureImage);
 		for (size_t i = 0; i < maxFramesInFlight; i++) {
 			device.destroySemaphore(renderFinishedSemaphores[i]);
 			device.destroySemaphore(imageAvailableSemaphores[i]);
 			device.destroyFence(inFlightFences[i]);
 		}
+
+		device.freeCommandBuffers(
+			(*commandPool)(),
+			commandBuffers
+		);
+		commandBuffers.clear();
+
+		device.freeDescriptorSets(descriptorPool, descriptorSets);
+		descriptorSets.clear();
+		
+		device.destroyDescriptorPool(descriptorPool);
+
+		for (auto & o : uniformBuffers) {
+			device.freeMemory(std::get<1>(o));
+			device.destroyBuffer(std::get<0>(o));
+		}
+		device.freeMemory(indexBufferMemory);
+		device.destroyBuffer(indexBuffer);
+		device.freeMemory(vertexBufferMemory);
+		device.destroyBuffer(vertexBuffer);
+
+		device.destroySampler(textureSampler);
+		device.destroyImageView(textureImageView);
+		device.freeMemory(textureImageMemory);
+		device.destroyImage(textureImage);
+		
+		graphicsPipeline = {};
+		swapChain = {};
+		commandPool = {};
+		device.destroy();
 	}
 
 protected:
