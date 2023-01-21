@@ -427,7 +427,7 @@ protected:
 
 public:
 	static uint32_t findMemoryType(
-		vk::PhysicalDevice physDev,
+		vk::raii::PhysicalDevice const & physDev,
 		uint32_t mask,
 		vk::MemoryPropertyFlags props
 	) {
@@ -748,21 +748,26 @@ public:
 };
 
 namespace VulkanDeviceMakeFromStagingBuffer {
-	std::pair<vk::Buffer, vk::DeviceMemory>
+	std::pair<
+		std::unique_ptr<vk::raii::Buffer>,
+		std::unique_ptr<vk::raii::DeviceMemory>
+	>
 	create(
-		vk::PhysicalDevice const physicalDevice,
-		vk::Device const device,
+		vk::raii::PhysicalDevice const & physicalDevice,
+		vk::raii::Device const & device,
 		void const * const srcData,
 		size_t bufferSize
 	) {
-		auto buffer = device.createBuffer(
+		auto buffer = std::make_unique<vk::raii::Buffer>(
+			device,
 			vk::BufferCreateInfo()
 				.setSize(bufferSize)
 				.setUsage(vk::BufferUsageFlagBits::eTransferSrc)
 				.setSharingMode(vk::SharingMode::eExclusive)
 		);
-		auto memRequirements = device.getBufferMemoryRequirements(buffer);
-		auto mem = device.allocateMemory(
+		auto memRequirements = (*device).getBufferMemoryRequirements(**buffer);
+		auto memory = std::make_unique<vk::raii::DeviceMemory>(
+			device,
 			vk::MemoryAllocateInfo()
 				.setAllocationSize(memRequirements.size)
 				.setMemoryTypeIndex(VulkanPhysicalDevice::findMemoryType(
@@ -772,42 +777,47 @@ namespace VulkanDeviceMakeFromStagingBuffer {
 					| vk::MemoryPropertyFlagBits::eHostCoherent
 				))
 		);
-		device.bindBufferMemory(buffer, mem, 0);
+		(*device).bindBufferMemory(
+			**buffer,
+			**memory,
+			0
+		);
 
-		void * dstData = {};
-		auto result = device.mapMemory(
-			mem,
+		void * dstData = memory->mapMemory(
 			0,
 			bufferSize,
-			vk::MemoryMapFlags{},
-			&dstData
+			vk::MemoryMapFlags{}
 		);
-		if (result != vk::Result::eSuccess) throw Common::Exception() << "memMemory " << result;
 		memcpy(dstData, srcData, (size_t)bufferSize);
-		vkUnmapMemory(device, mem);
-	
-		return std::make_pair(buffer, mem);
+		memory->unmapMemory();
+		
+		return std::make_pair(std::move(buffer), std::move(memory));
 	}
 };
 
 namespace VulkanDeviceMemoryBuffer  {
-	std::pair<vk::Buffer, vk::DeviceMemory>
+	std::pair<
+		std::unique_ptr<vk::raii::Buffer>,
+		std::unique_ptr<vk::raii::DeviceMemory>
+	>
 	create(
-		vk::PhysicalDevice const physicalDevice,
-		vk::Device const device,
+		vk::raii::PhysicalDevice const & physicalDevice,
+		vk::raii::Device const & device,
 		vk::DeviceSize size,
 		vk::BufferUsageFlags usage,
 		vk::MemoryPropertyFlags properties
 	) {
-		auto buffer = device.createBuffer(
+		auto buffer = std::make_unique<vk::raii::Buffer>(
+			device,
 			vk::BufferCreateInfo()
 				.setFlags(vk::BufferCreateFlags())
 				.setSize(size)
 				.setUsage(usage)
 				.setSharingMode(vk::SharingMode::eExclusive)
 		);
-		auto memRequirements = device.getBufferMemoryRequirements(buffer);
-		auto memory = device.allocateMemory(
+		auto memRequirements = (*device).getBufferMemoryRequirements(**buffer);
+		auto memory = std::make_unique<vk::raii::DeviceMemory>(
+			device,
 			vk::MemoryAllocateInfo()
 				.setAllocationSize(memRequirements.size)
 				.setMemoryTypeIndex(VulkanPhysicalDevice::findMemoryType(
@@ -816,20 +826,27 @@ namespace VulkanDeviceMemoryBuffer  {
 					properties
 				))
 		);
-		device.bindBufferMemory(buffer, memory, 0);
-		return std::make_pair(buffer, memory);
+		(*device).bindBufferMemory(
+			**buffer,
+			**memory,
+			0
+		);
+		return std::make_pair(std::move(buffer), std::move(memory));
 	}
 
-	std::pair<vk::Buffer, vk::DeviceMemory>
+	std::pair<
+		std::unique_ptr<vk::raii::Buffer>,
+		std::unique_ptr<vk::raii::DeviceMemory>
+	>
 	makeBufferFromStaged(
-		vk::PhysicalDevice const physicalDevice,
-		vk::Device const device,
+		vk::raii::PhysicalDevice const & physicalDevice,
+		vk::raii::Device const & device,
 		VulkanCommandPool const & commandPool,
 		void const * const srcData,
 		size_t bufferSize
 	) {
-		vk::Buffer stagingBuffer;
-		vk::DeviceMemory stagingBufferMemory;
+		std::unique_ptr<vk::raii::Buffer> stagingBuffer;
+		std::unique_ptr<vk::raii::DeviceMemory> stagingBufferMemory;
 		std::tie(stagingBuffer, stagingBufferMemory) 
 		= VulkanDeviceMakeFromStagingBuffer::create(
 			physicalDevice,
@@ -838,8 +855,8 @@ namespace VulkanDeviceMemoryBuffer  {
 			bufferSize
 		);
 
-		vk::Buffer buffer;
-		vk::DeviceMemory memory;
+		std::unique_ptr<vk::raii::Buffer> buffer;
+		std::unique_ptr<vk::raii::DeviceMemory> memory;
 		std::tie(buffer, memory) = VulkanDeviceMemoryBuffer::create(
 			physicalDevice,
 			device,
@@ -850,24 +867,24 @@ namespace VulkanDeviceMemoryBuffer  {
 		);
 		
 		commandPool.copyBuffer(
-			stagingBuffer,
-			buffer,
+			**stagingBuffer,
+			**buffer,
 			bufferSize
 		);
 
-		device.destroyBuffer(stagingBuffer);
-		device.freeMemory(stagingBufferMemory);
-
-		return std::make_pair(buffer, memory);
+		return std::make_pair(std::move(buffer), std::move(memory));
 	}
 };
 
 namespace VulkanDeviceMemoryImage {
 
-	std::pair<vk::Image, vk::DeviceMemory>
+	std::pair<
+		std::unique_ptr<vk::raii::Image>,
+		std::unique_ptr<vk::raii::DeviceMemory>
+	>
 	createImage(
-		vk::PhysicalDevice const physicalDevice,
-		vk::Device const & device,
+		vk::raii::PhysicalDevice const & physicalDevice,
+		vk::raii::Device const & device,
 		uint32_t width,
 		uint32_t height,
 		uint32_t mipLevels,
@@ -878,7 +895,8 @@ namespace VulkanDeviceMemoryImage {
 		vk::MemoryPropertyFlags properties
 	) {
 		// TODO this as a ctor that just calls Super
-		auto image = device.createImage(
+		std::unique_ptr<vk::raii::Image> image = std::make_unique<vk::raii::Image>(
+			device,
 			vk::ImageCreateInfo()
 				.setImageType(vk::ImageType::e2D)
 				.setFormat(format)
@@ -892,8 +910,9 @@ namespace VulkanDeviceMemoryImage {
 				.setInitialLayout(vk::ImageLayout::eUndefined)
 		);
 
-		auto memRequirements = device.getImageMemoryRequirements(image);
-		auto imageMemory = device.allocateMemory(
+		auto memRequirements = image->getMemoryRequirements();
+		std::unique_ptr<vk::raii::DeviceMemory> imageMemory = std::make_unique<vk::raii::DeviceMemory>(
+			device,
 			vk::MemoryAllocateInfo()
 				.setAllocationSize(memRequirements.size)
 				.setMemoryTypeIndex(VulkanPhysicalDevice::findMemoryType(
@@ -902,14 +921,17 @@ namespace VulkanDeviceMemoryImage {
 					properties
 				))
 		);
-		device.bindImageMemory(image, imageMemory, 0);
-		return std::make_pair(image, imageMemory);
+		(*device).bindImageMemory(**image, **imageMemory, 0);
+		return std::make_pair(std::move(image), std::move(imageMemory));
 	}
 
-	std::pair<vk::Image, vk::DeviceMemory>
+	std::pair<
+		std::unique_ptr<vk::raii::Image>,
+		std::unique_ptr<vk::raii::DeviceMemory>
+	>
 	makeTextureFromStaged(
-		vk::PhysicalDevice const & physicalDevice,
-		vk::Device const & device,
+		vk::raii::PhysicalDevice const & physicalDevice,
+		vk::raii::Device const & device,
 		VulkanCommandPool const & commandPool,
 		void const * const srcData,
 		size_t bufferSize,
@@ -917,8 +939,8 @@ namespace VulkanDeviceMemoryImage {
 		int texHeight,
 		uint32_t mipLevels
 	) {
-		vk::Buffer stagingBuffer;
-		vk::DeviceMemory stagingBufferMemory;
+		std::unique_ptr<vk::raii::Buffer> stagingBuffer;
+		std::unique_ptr<vk::raii::DeviceMemory> stagingBufferMemory;
 		std::tie(stagingBuffer, stagingBufferMemory) 
 		= VulkanDeviceMakeFromStagingBuffer::create(
 			physicalDevice,
@@ -927,8 +949,8 @@ namespace VulkanDeviceMemoryImage {
 			bufferSize
 		);
 		
-		vk::Image image;
-		vk::DeviceMemory imageMemory;
+		std::unique_ptr<vk::raii::Image> image;
+		std::unique_ptr<vk::raii::DeviceMemory> imageMemory;
 		std::tie(image, imageMemory) 
 		= createImage(
 			physicalDevice,
@@ -946,14 +968,14 @@ namespace VulkanDeviceMemoryImage {
 		);
 
 		commandPool.transitionImageLayout(
-			image,
+			**image,
 			vk::ImageLayout::eUndefined,
 			vk::ImageLayout::eTransferDstOptimal,
 			mipLevels
 		);
 		commandPool.copyBufferToImage(
-			stagingBuffer,
-			image,
+			**stagingBuffer,
+			**image,
 			(uint32_t)texWidth,
 			(uint32_t)texHeight
 		);
@@ -966,27 +988,24 @@ namespace VulkanDeviceMemoryImage {
 		);
 		*/
 		
-		device.destroyBuffer(stagingBuffer);
-		device.freeMemory(stagingBufferMemory);
-		
-		return std::make_pair(image, imageMemory);
+		return std::make_pair(std::move(image), std::move(imageMemory));
 	}
 
 };
 
 struct VulkanSwapChain {
 protected:
-	vk::SwapchainKHR obj;
+	std::unique_ptr<vk::raii::SwapchainKHR> obj;
 	//owned
 	vk::RenderPass renderPass;
 
-	vk::Image depthImage;
-	vk::DeviceMemory depthImageMemory;
-	vk::ImageView depthImageView;
+	std::unique_ptr<vk::raii::Image> depthImage;
+	std::unique_ptr<vk::raii::DeviceMemory> depthImageMemory;
+	std::unique_ptr<vk::raii::ImageView> depthImageView;
 	
-	vk::Image colorImage;
-	vk::DeviceMemory colorImageMemory;
-	vk::ImageView colorImageView;
+	std::unique_ptr<vk::raii::Image> colorImage;
+	std::unique_ptr<vk::raii::DeviceMemory> colorImageMemory;
+	std::unique_ptr<vk::raii::ImageView> colorImageView;
 	
 	// hold for this class lifespan
 	vk::raii::Device const & device;
@@ -996,37 +1015,27 @@ public:
 	// I would combine these into one struct so they can be dtored together
 	// but it seems vulkan wants vk::Images linear for its getter?
 	std::vector<vk::Image> images;
-	std::vector<vk::ImageView> imageViews;
-	std::vector<vk::Framebuffer> framebuffers;
+	std::vector<std::unique_ptr<vk::raii::ImageView>> imageViews;
+	std::vector<vk::raii::Framebuffer> framebuffers;
 	
 public:
-	auto const & operator()() const { return obj; }
+	auto const & operator()() const { return *obj; }
 	auto const & getRenderPass() const { return renderPass; }
 
 	~VulkanSwapChain() {
-		(*device).destroyImageView(depthImageView);
-		(*device).freeMemory(depthImageMemory);
-		(*device).destroyImage(depthImage);
+		depthImageView = {};
+		depthImageMemory = {};
+		depthImage = {};
 		
-		(*device).destroyImageView(colorImageView);
-		(*device).freeMemory(colorImageMemory);
-		(*device).destroyImage(colorImage);
+		colorImageView = {};
+		colorImageMemory = {};
+		colorImage = {};
 		
-		for (auto & framebuffer : framebuffers) {
-			(*device).destroyFramebuffer(framebuffer);
-		}
-		for (auto & imageView : imageViews) {
-			(*device).destroyImageView(imageView);
-		}
+		framebuffers.clear();
 		imageViews.clear();
-		(*device).destroySwapchainKHR(obj);
+		obj = {};
 	}
 
-	// should this be a 'devices' or a 'swapchain' method?
-	auto getImages() const {
-		return (*device).getSwapchainImagesKHR(obj);
-	}
-	
 	// ************** from here on down, app-specific **************
 	// but so are all the member variables so ...
 
@@ -1072,9 +1081,14 @@ public:
 		} else {
 			createInfo.setImageSharingMode(vk::SharingMode::eExclusive);
 		}
-		obj = (*device).createSwapchainKHR(createInfo);
+		obj = std::make_unique<vk::raii::SwapchainKHR>(
+			device,
+			createInfo
+		);
 
-		images = getImages();
+		for (auto const & vkimage : obj->getImages()) {
+			images.push_back(vk::Image(vkimage));
+		}
 		for (size_t i = 0; i < images.size(); i++) {
 			imageViews.push_back(createImageView(
 				images[i],
@@ -1096,8 +1110,8 @@ public:
 		
 		std::tie(colorImage, colorImageMemory) 
 		= VulkanDeviceMemoryImage::createImage(
-			*physicalDevice,
-			*device,
+			physicalDevice,
+			device,
 			extent.width,
 			extent.height,
 			1,
@@ -1108,7 +1122,7 @@ public:
 			vk::MemoryPropertyFlagBits::eDeviceLocal
 		);
 		colorImageView = createImageView(
-			colorImage,
+			**colorImage,
 			colorFormat,
 			vk::ImageAspectFlagBits::eColor,
 			1
@@ -1118,8 +1132,8 @@ public:
 		auto depthFormat = VulkanPhysicalDevice::findDepthFormat(*physicalDevice);
 		std::tie(depthImage, depthImageMemory) 
 		= VulkanDeviceMemoryImage::createImage(
-			*physicalDevice,
-			*device,
+			physicalDevice,
+			device,
 			extent.width,
 			extent.height,
 			1,
@@ -1130,39 +1144,42 @@ public:
 			vk::MemoryPropertyFlagBits::eDeviceLocal
 		);
 		depthImageView = createImageView(
-			depthImage,
+			**depthImage,
 			depthFormat,
 			vk::ImageAspectFlagBits::eDepth,
 			1
 		);
 		
 		//createFramebuffers
-		framebuffers.resize(imageViews.size());
 		for (size_t i = 0; i < imageViews.size(); i++) {
 			auto attachments = Common::make_array(
-				colorImageView,
-				depthImageView,
-				imageViews[i]
+				**colorImageView,
+				**depthImageView,
+				**imageViews[i]
 			);
-			framebuffers[i] = (*device).createFramebuffer(
-				vk::FramebufferCreateInfo()
-					.setRenderPass(renderPass)
-					.setAttachments(attachments)
-					.setWidth(extent.width)
-					.setHeight(extent.height)
-					.setLayers(1)
+			framebuffers.push_back(
+				vk::raii::Framebuffer(
+					device,
+					vk::FramebufferCreateInfo()
+						.setRenderPass(renderPass)
+						.setAttachments(attachments)
+						.setWidth(extent.width)
+						.setHeight(extent.height)
+						.setLayers(1)
+				)
 			);
 		}
 	}
 
 public:
-	vk::ImageView createImageView(
+	std::unique_ptr<vk::raii::ImageView> createImageView(
 		vk::Image image,
 		vk::Format format,
 		vk::ImageAspectFlags aspectFlags,
 		uint32_t mipLevels
 	) {
-		return (*device).createImageView(
+		return std::make_unique<vk::raii::ImageView>(
+			device,
 			vk::ImageViewCreateInfo()
 				.setImage(image)
 				.setViewType(vk::ImageViewType::e2D)
@@ -1434,16 +1451,16 @@ protected:
 	std::unique_ptr<VulkanGraphicsPipeline> graphicsPipeline;
 	std::unique_ptr<VulkanCommandPool> commandPool;
 	
-	vk::Buffer vertexBuffer;
-	vk::DeviceMemory vertexBufferMemory;
-	vk::Buffer indexBuffer;
-	vk::DeviceMemory indexBufferMemory;
+	std::unique_ptr<vk::raii::Buffer> vertexBuffer;
+	std::unique_ptr<vk::raii::DeviceMemory> vertexBufferMemory;
+	std::unique_ptr<vk::raii::Buffer> indexBuffer;
+	std::unique_ptr<vk::raii::DeviceMemory> indexBufferMemory;
 	
 	uint32_t mipLevels = {};
 
-	vk::Image textureImage;
-	vk::DeviceMemory textureImageMemory;
-	vk::ImageView textureImageView;
+	std::unique_ptr<vk::raii::Image> textureImage;
+	std::unique_ptr<vk::raii::DeviceMemory> textureImageMemory;
+	std::unique_ptr<vk::raii::ImageView> textureImageView;
 	vk::Sampler textureSampler;
 	
 	std::vector<Vertex> vertices;
@@ -1451,12 +1468,12 @@ protected:
 
 	// hmm combine these two into a class?
 	std::vector<std::pair<
-		vk::Buffer,
-		vk::DeviceMemory
+		std::unique_ptr<vk::raii::Buffer>,
+		std::unique_ptr<vk::raii::DeviceMemory>
 	>> uniformBuffers;
 	std::vector<void*> uniformBuffersMapped;
 	
-	vk::DescriptorPool descriptorPool;
+	std::unique_ptr<vk::raii::DescriptorPool> descriptorPool;
 	
 	// each of these, there are one per number of frames in flight
 	std::vector<vk::raii::DescriptorSet> descriptorSets;
@@ -1567,7 +1584,7 @@ public:
 		createTextureImage();
 	   
 		textureImageView = swapChain->createImageView(
-			textureImage,
+			**textureImage,
 			vk::Format::eR8G8B8A8Srgb,
 			vk::ImageAspectFlagBits::eColor,
 			mipLevels
@@ -1595,8 +1612,8 @@ public:
 		
 		std::tie(vertexBuffer, vertexBufferMemory) 
 		= VulkanDeviceMemoryBuffer::makeBufferFromStaged(
-			**physicalDevice,
-			**device,
+			*physicalDevice,
+			*device,
 			*commandPool.get(),
 			vertices.data(),
 			sizeof(vertices[0]) * vertices.size()
@@ -1604,49 +1621,48 @@ public:
 
 		std::tie(indexBuffer, indexBufferMemory)
 		= VulkanDeviceMemoryBuffer::makeBufferFromStaged(
-			**physicalDevice,
-			**device,
+			*physicalDevice,
+			*device,
 			*commandPool.get(),
 			indices.data(),
 			sizeof(indices[0]) * indices.size()
 		);
 
-		uniformBuffersMapped.resize(maxFramesInFlight);
 		for (size_t i = 0; i < maxFramesInFlight; i++) {
-			uniformBuffers.push_back(VulkanDeviceMemoryBuffer::create(
-				**physicalDevice,
-				**device,
-				sizeof(UniformBufferObject),
-				vk::BufferUsageFlagBits::eUniformBuffer,
-				vk::MemoryPropertyFlagBits::eHostVisible
-				| vk::MemoryPropertyFlagBits::eHostCoherent
-			));
-			auto result = (**device).mapMemory(
-				std::get<1>(uniformBuffers[i]),
+			uniformBuffers.push_back(
+				VulkanDeviceMemoryBuffer::create(
+					*physicalDevice,
+					*device,
+					sizeof(UniformBufferObject),
+					vk::BufferUsageFlagBits::eUniformBuffer,
+					vk::MemoryPropertyFlagBits::eHostVisible
+					| vk::MemoryPropertyFlagBits::eHostCoherent
+				)
+			);
+			uniformBuffersMapped.push_back(std::get<1>(uniformBuffers[i])->mapMemory(
 				0,
 				sizeof(UniformBufferObject),
-				vk::MemoryMapFlags{},
-				&uniformBuffersMapped[i]
-			);
-			if (result != vk::Result::eSuccess) throw Common::Exception() << "memMemory " << result;
+				vk::MemoryMapFlags{}
+			));
 		}
 
 		{
 			auto poolSizes = Common::make_array(
 				vk::DescriptorPoolSize()
-				.setType(vk::DescriptorType::eUniformBuffer)
-				.setDescriptorCount(maxFramesInFlight),
+					.setType(vk::DescriptorType::eUniformBuffer)
+					.setDescriptorCount(maxFramesInFlight),
 				vk::DescriptorPoolSize()
-				.setType(vk::DescriptorType::eCombinedImageSampler)
-				.setDescriptorCount(maxFramesInFlight)
+					.setType(vk::DescriptorType::eCombinedImageSampler)
+					.setDescriptorCount(maxFramesInFlight)
 			);
 		
-			descriptorPool = (**device).createDescriptorPool(
+			descriptorPool = std::make_unique<vk::raii::DescriptorPool>(
+				*device,
 				vk::DescriptorPoolCreateInfo()
-				.setMaxSets(maxFramesInFlight)
-				//why aren't these two merged into one function?
-				.setPoolSizeCount(poolSizes.size())
-				.setPPoolSizes(poolSizes.data())
+					.setMaxSets(maxFramesInFlight)
+					//why aren't these two merged into one function?
+					.setPoolSizeCount(poolSizes.size())
+					.setPPoolSizes(poolSizes.data())
 			);
 		}
 
@@ -1679,27 +1695,26 @@ protected:
 
 public:
 	~VulkanCommon() {
+		// vector of unique pointers, can't use `= {}`, gotta use `.clear()`
 		commandBuffers.clear();
 		descriptorSets.clear();
 		imageAvailableSemaphores.clear();
 		renderFinishedSemaphores.clear();
 		inFlightFences.clear();
 
-		(**device).destroyDescriptorPool(descriptorPool);
+		descriptorPool = {};
 
-		for (auto & o : uniformBuffers) {
-			(**device).freeMemory(std::get<1>(o));
-			(**device).destroyBuffer(std::get<0>(o));
-		}
-		(**device).freeMemory(indexBufferMemory);
-		(**device).destroyBuffer(indexBuffer);
-		(**device).freeMemory(vertexBufferMemory);
-		(**device).destroyBuffer(vertexBuffer);
+		uniformBuffers.clear();
+		
+		indexBufferMemory = {};
+		indexBuffer = {};
+		vertexBufferMemory = {};
+		vertexBuffer = {};
 
 		(**device).destroySampler(textureSampler);
-		(**device).destroyImageView(textureImageView);
-		(**device).freeMemory(textureImageMemory);
-		(**device).destroyImage(textureImage);
+		textureImageView = {};
+		textureImageMemory = {};
+		textureImage = {};
 		
 		graphicsPipeline = {};
 		swapChain = {};
@@ -1746,8 +1761,8 @@ protected:
 	
 		std::tie(textureImage, textureImageMemory) 
 		= VulkanDeviceMemoryImage::makeTextureFromStaged(
-			**physicalDevice,
-			**device,
+			*physicalDevice,
+			*device,
 			*commandPool.get(),
 			srcData,
 			bufferSize,
@@ -1757,7 +1772,7 @@ protected:
 		);
 	
 		generateMipmaps(
-			textureImage,
+			*textureImage,
 			vk::Format::eR8G8B8A8Srgb,
 			texSize.x,
 			texSize.y,
@@ -1766,7 +1781,7 @@ protected:
 	}
 
 	void generateMipmaps(
-		vk::Image image,
+		vk::raii::Image const & image,
 		vk::Format imageFormat,
 		int32_t texWidth,
 		int32_t texHeight,
@@ -1788,7 +1803,7 @@ protected:
 		auto barrier = vk::ImageMemoryBarrier()
 			.setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
 			.setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-			.setImage(image)
+			.setImage(*image)
 			.setSubresourceRange(
 				vk::ImageSubresourceRange()
 					.setAspectMask(vk::ImageAspectFlagBits::eColor)
@@ -1842,9 +1857,9 @@ protected:
 				));
 			
 			commandBuffer().blitImage(
-				image,
+				*image,
 				vk::ImageLayout::eTransferSrcOptimal,
-				image,
+				*image,
 				vk::ImageLayout::eTransferDstOptimal,
 				Common::make_array(blit),
 				vk::Filter::eLinear
@@ -1974,7 +1989,7 @@ protected:
 		commandBuffer.beginRenderPass(
 			vk::RenderPassBeginInfo()
 				.setRenderPass(swapChain->getRenderPass())
-				.setFramebuffer(swapChain->framebuffers[imageIndex])
+				.setFramebuffer(*swapChain->framebuffers[imageIndex])
 				.setRenderArea(
 					vk::Rect2D()
 						.setExtent(swapChain->extent)
@@ -2011,13 +2026,13 @@ protected:
 			commandBuffer.bindVertexBuffers(
 				0,
 				Common::make_array(
-					vertexBuffer
+					**vertexBuffer
 				),
 				Common::make_array<vk::DeviceSize>(0)
 			);
 
 			commandBuffer.bindIndexBuffer(
-				indexBuffer,
+				**indexBuffer,
 				0,
 				vk::IndexType::eUint32
 			);
@@ -2058,18 +2073,18 @@ protected:
 		std::vector<vk::DescriptorSetLayout> layouts(maxFramesInFlight, graphicsPipeline->getDescriptorSetLayout());
 		descriptorSets = device->allocateDescriptorSets(
 			vk::DescriptorSetAllocateInfo()
-				.setDescriptorPool(descriptorPool)
+				.setDescriptorPool(**descriptorPool)
 				.setDescriptorSetCount(maxFramesInFlight)
 				.setSetLayouts(layouts)
 		);
 
 		for (size_t i = 0; i < maxFramesInFlight; i++) {
 			auto bufferInfo = vk::DescriptorBufferInfo()
-				.setBuffer(std::get<0>(uniformBuffers[i]))
+				.setBuffer(**std::get<0>(uniformBuffers[i]))
 				.setRange(sizeof(UniformBufferObject));
 			auto imageInfo = vk::DescriptorImageInfo()
 				.setSampler(textureSampler)
-				.setImageView(textureImageView)
+				.setImageView(**textureImageView)
 				.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
 			auto descriptorWrites = Common::make_array(
 				vk::WriteDescriptorSet()
@@ -2190,7 +2205,7 @@ public:
 			vk::Result result;
 			std::tie(result, imageIndex) = device->acquireNextImage2KHR(
 				vk::AcquireNextImageInfoKHR()
-					.setSwapchain((*swapChain)())
+					.setSwapchain(*(*swapChain)())
 					.setTimeout(UINT64_MAX)
 					.setSemaphore(*imageAvailableSemaphores[currentFrame])
 			);
@@ -2245,7 +2260,7 @@ public:
 		);
 		
 		auto swapChains = Common::make_array(
-			(*swapChain)()
+			*(*swapChain)()
 		);
 		auto result = presentQueue->presentKHR(
 			vk::PresentInfoKHR()
