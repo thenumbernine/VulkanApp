@@ -575,32 +575,36 @@ struct VulkanRenderPass  {
 struct VulkanSingleTimeCommand  {
 protected:	
 	//owns:
-	vk::CommandBuffer cmd;
+	std::vector<vk::raii::CommandBuffer> cmds;
 	//held:
-	vk::Device const device;
-	vk::Queue const queue;
-	vk::CommandPool const commandPool;
+	vk::raii::Device const & device;
+	vk::raii::Queue const & queue;
+	vk::raii::CommandPool const & commandPool;
 
 public:
-	auto const & operator()() const { return cmd; }
+	auto const & operator()() const { return cmds[0]; }
 
 	VulkanSingleTimeCommand(
-		vk::Device const device_,
-		vk::Queue const queue_,
-		vk::CommandPool commandPool_
-	) : device(device_),
+		vk::raii::Device const & device_,
+		vk::raii::Queue const & queue_,
+		vk::raii::CommandPool const & commandPool_
+	) : 
+		cmds(
+			device_.allocateCommandBuffers(
+	//			commandPool_,
+				vk::CommandBufferAllocateInfo()
+					.setCommandPool(*commandPool_)
+					.setLevel(vk::CommandBufferLevel::ePrimary)
+					.setCommandBufferCount(1)
+			)
+		),
+		device(device_),
 		queue(queue_),
 		commandPool(commandPool_)
 	{
-		cmd = device.allocateCommandBuffers(
-			vk::CommandBufferAllocateInfo()
-				.setCommandPool(commandPool)
-				.setLevel(vk::CommandBufferLevel::ePrimary)
-				.setCommandBufferCount(1)
-		)[0];
 		// end part that matches
 		// and this part kinda matches the start of 'recordCommandBuffer'
-		cmd.begin(
+		cmds[0].begin(
 			vk::CommandBufferBeginInfo()
 				.setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit)
 		);
@@ -608,36 +612,33 @@ public:
 	}
 	
 	~VulkanSingleTimeCommand() {
-		cmd.end();
-		auto cmds = Common::make_array(cmd);
+		cmds[0].end();
+		auto vkcmds = Common::make_array(
+			*cmds[0]
+		);
 		queue.submit(
 			vk::SubmitInfo()
-				.setCommandBuffers(cmds)
+				.setCommandBuffers(vkcmds)
 		);
 		queue.waitIdle();
-		device.freeCommandBuffers(commandPool, cmd);
 	}
 };
 
 struct VulkanCommandPool  {
 protected:
 	//owns:
-	vk::CommandPool commandPool;
+	vk::raii::CommandPool commandPool;
 	//held:
-	vk::Device const device;
-	vk::Queue const graphicsQueue;
+	vk::raii::Device const & device;
+	vk::raii::Queue const & graphicsQueue;
 public:
 	auto const & operator()() const { return commandPool; }
 	
-	~VulkanCommandPool() {
-		device.destroyCommandPool(commandPool);
-	}
-	
 	VulkanCommandPool(
-		vk::Device const device_,
-		vk::Queue const graphicsQueue_,
+		vk::raii::Device const & device_,
+		vk::raii::Queue const & graphicsQueue_,
 		vk::CommandPoolCreateInfo const info
-	) : commandPool(device_.createCommandPool(info)),
+	) : commandPool(device_, info),
 		device(device_),
 		graphicsQueue(graphicsQueue_)
 	{}
@@ -697,22 +698,18 @@ public:
 			(*this)()
 		);
 
-		auto barrier = vk::ImageMemoryBarrier(
-			{},
-			{},
-			oldLayout,
-			newLayout,
-			VK_QUEUE_FAMILY_IGNORED,
-			VK_QUEUE_FAMILY_IGNORED,
-			image,
-			vk::ImageSubresourceRange(
-				vk::ImageAspectFlagBits::eColor,
-				0,
-				mipLevels,
-				0,
-				1
-			)
-		);
+		auto barrier = vk::ImageMemoryBarrier()
+			.setOldLayout(oldLayout)
+			.setNewLayout(newLayout)
+			.setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+			.setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+			.setImage(image)
+			.setSubresourceRange(
+				vk::ImageSubresourceRange()
+					.setAspectMask(vk::ImageAspectFlagBits::eColor)
+					.setLevelCount(mipLevels)
+					.setLayerCount(1)
+			);
 
 		vk::PipelineStageFlags sourceStage;
 		vk::PipelineStageFlags destinationStage;
@@ -1239,16 +1236,17 @@ protected:
 
 //only used by VulkanGraphicsPipeline's ctor
 namespace VulkanShaderModule {
-	vk::ShaderModule fromFile(
-		vk::Device const device,
-		std::string const filename
+	auto fromFile(
+		vk::raii::Device const & device,
+		std::string const & filename
 	) {
 		auto code = Common::File::read(filename);
-		return device.createShaderModule(
+		return vk::raii::ShaderModule(
+			device,
 			vk::ShaderModuleCreateInfo()
-			// why isn't there one method that does these two things?
-			.setPCode((uint32_t const *)code.data())
-			.setCodeSize(code.size())
+				// why isn't there one method that does these two things?
+				.setPCode((uint32_t const *)code.data())
+				.setCodeSize(code.size())
 		);
 	}
 };
@@ -1295,15 +1293,8 @@ public:
 				.setBindings(bindings)
 		);
 
-		auto vertShaderModule = VulkanShaderModule::fromFile(
-			*device,
-			"shader-vert.spv"
-		);
-		
-		auto fragShaderModule = VulkanShaderModule::fromFile(
-			*device,
-			"shader-frag.spv"
-		);
+		auto vertShaderModule = VulkanShaderModule::fromFile(device, "shader-vert.spv");
+		auto fragShaderModule = VulkanShaderModule::fromFile(device, "shader-frag.spv");
 		
 		auto bindingDescriptions = Common::make_array(
 			Vertex::getBindingDescription()
@@ -1374,43 +1365,34 @@ public:
 				.setSetLayouts(descriptorSetLayouts)
 		);
 
-		auto vertShaderStageInfo = vk::PipelineShaderStageCreateInfo()
-			.setStage(vk::ShaderStageFlagBits::eVertex)
-			.setModule(vertShaderModule)
-			.setPName("main");
-			//.pName = "vert",		// GLSL uses 'main', but clspv doesn't allow 'main', so ....
-		auto fragShaderStageInfo = vk::PipelineShaderStageCreateInfo()
-			.setStage(vk::ShaderStageFlagBits::eFragment)
-			.setModule(fragShaderModule)
-			.setPName("main");
-			//.pName = "frag",
 		auto shaderStages = Common::make_array(
-			vertShaderStageInfo,
-			fragShaderStageInfo
+			vk::PipelineShaderStageCreateInfo()
+				.setStage(vk::ShaderStageFlagBits::eVertex)
+				.setModule(*vertShaderModule)
+				.setPName("main"),	//"vert"	//GLSL uses 'main', but clspv doesn't allow 'main', so ...
+			vk::PipelineShaderStageCreateInfo()
+				.setStage(vk::ShaderStageFlagBits::eFragment)
+				.setModule(*fragShaderModule)
+				.setPName("main")	//"frag"
 		);
-		auto info = vk::GraphicsPipelineCreateInfo()
-			.setStages(shaderStages)
-			.setPVertexInputState(&vertexInputInfo)
-			.setPInputAssemblyState(&inputAssembly)
-			.setPViewportState(&viewportState)
-			.setPRasterizationState(&rasterizer)
-			.setPMultisampleState(&multisampling)
-			.setPDepthStencilState(&depthStencil)
-			.setPColorBlendState(&colorBlending)
-			.setPDynamicState(&dynamicState)
-			.setLayout(**pipelineLayout)
-			.setRenderPass(*renderPass)
-			.setSubpass(0)
-			.setBasePipelineHandle(vk::Pipeline());
 		obj = std::make_unique<vk::raii::Pipeline>(
 			device,
-			nullptr,//vk::Optional<vk::raii::PipelineCache>(),
-			info,
-			nullptr	
+			nullptr,
+			vk::GraphicsPipelineCreateInfo()
+				.setStages(shaderStages)
+				.setPVertexInputState(&vertexInputInfo)	//why it need to be a pointer?
+				.setPInputAssemblyState(&inputAssembly)
+				.setPViewportState(&viewportState)
+				.setPRasterizationState(&rasterizer)
+				.setPMultisampleState(&multisampling)
+				.setPDepthStencilState(&depthStencil)
+				.setPColorBlendState(&colorBlending)
+				.setPDynamicState(&dynamicState)
+				.setLayout(**pipelineLayout)
+				.setRenderPass(*renderPass)
+				.setSubpass(0)
+				.setBasePipelineHandle(vk::Pipeline())
 		);
-	
-		(*device).destroyShaderModule(vertShaderModule);
-		(*device).destroyShaderModule(fragShaderModule);
 	}
 };
 
@@ -1455,7 +1437,7 @@ protected:
 	std::unique_ptr<vk::raii::Image> textureImage;
 	std::unique_ptr<vk::raii::DeviceMemory> textureImageMemory;
 	std::unique_ptr<vk::raii::ImageView> textureImageView;
-	vk::Sampler textureSampler;
+	std::unique_ptr<vk::raii::Sampler> textureSampler;
 	
 	std::vector<Vertex> vertices;
 	std::vector<uint32_t> indices;
@@ -1567,8 +1549,8 @@ public:
 				*surface
 			);
 			commandPool = std::make_unique<VulkanCommandPool>(
-				**device,
-				**graphicsQueue,
+				*device,
+				*graphicsQueue,
 				vk::CommandPoolCreateInfo()
 					.setFlags(vk::CommandPoolCreateFlagBits::eResetCommandBuffer)
 					.setQueueFamilyIndex(queueFamilyIndices.graphicsFamily.value())
@@ -1584,7 +1566,8 @@ public:
 			mipLevels
 		);
 
-		textureSampler = (**device).createSampler(
+		textureSampler = std::make_unique<vk::raii::Sampler>(
+			*device,
 			vk::SamplerCreateInfo()
 				.setMagFilter(vk::Filter::eLinear)
 				.setMinFilter(vk::Filter::eLinear)
@@ -1608,7 +1591,7 @@ public:
 		= VulkanDeviceMemoryBuffer::makeBufferFromStaged(
 			*physicalDevice,
 			*device,
-			*commandPool.get(),
+			*commandPool,
 			vertices.data(),
 			sizeof(vertices[0]) * vertices.size()
 		);
@@ -1617,7 +1600,7 @@ public:
 		= VulkanDeviceMemoryBuffer::makeBufferFromStaged(
 			*physicalDevice,
 			*device,
-			*commandPool.get(),
+			*commandPool,
 			indices.data(),
 			sizeof(indices[0]) * indices.size()
 		);
@@ -1705,7 +1688,7 @@ public:
 		vertexBufferMemory = {};
 		vertexBuffer = {};
 
-		(**device).destroySampler(textureSampler);
+		textureSampler = {};
 		textureImageView = {};
 		textureImageMemory = {};
 		textureImage = {};
@@ -1757,7 +1740,7 @@ protected:
 		= VulkanDeviceMemoryImage::makeTextureFromStaged(
 			*physicalDevice,
 			*device,
-			*commandPool.get(),
+			*commandPool,
 			srcData,
 			bufferSize,
 			texSize.x,
@@ -1789,8 +1772,8 @@ protected:
 		}
 
 		VulkanSingleTimeCommand commandBuffer(
-			**device,
-			**graphicsQueue,
+			*device,
+			*graphicsQueue,
 			(*commandPool)()
 		);
 
@@ -1959,7 +1942,7 @@ protected:
 		// TODO this matches 'VulkanSingleTimeCommand' ctor
 		commandBuffers = device->allocateCommandBuffers(
 			vk::CommandBufferAllocateInfo()
-				.setCommandPool((*commandPool)())
+				.setCommandPool(*(*commandPool)())
 				.setLevel(vk::CommandBufferLevel::ePrimary)
 				.setCommandBufferCount(maxFramesInFlight)
 		);
@@ -2077,7 +2060,7 @@ protected:
 				.setBuffer(**std::get<0>(uniformBuffers[i]))
 				.setRange(sizeof(UniformBufferObject));
 			auto imageInfo = vk::DescriptorImageInfo()
-				.setSampler(textureSampler)
+				.setSampler(**textureSampler)
 				.setImageView(**textureImageView)
 				.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
 			auto descriptorWrites = Common::make_array(
