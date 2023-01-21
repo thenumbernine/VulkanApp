@@ -15,86 +15,16 @@
 
 #define NAME_PAIR(x)	#x, x
 
-template<
-	typename F,
-	typename... Args
-> void vulkanSafe(
-	std::string what,
-	F f,
-	Args&&... args
-) {
-	VkResult res = f(std::forward<Args>(args)...);
-	if (res != (VkResult)vk::Result::eSuccess) {
-		throw Common::Exception() << what << " failed: " << res;
-	}
-}
-
 #define SDL_VULKAN_SAFE(f, ...) {\
 	if (f(__VA_ARGS__) == SDL_FALSE) {\
 		throw Common::Exception() << FILE_AND_LINE " " #f " failed: " << SDL_GetError();\
 	}\
 }
 
-template<
-	typename T,
-	typename F,
-	typename... Args
->
-auto vulkanEnum(
-	std::string what,
-	F f,
-	Args&&... args
-) {
-	if constexpr (std::is_same_v<
-		typename Common::FunctionPointer<F>::Return,
-		void
-	>) {
-		auto count = uint32_t{};
-		std::vector<T> result;
-		f(std::forward<Args>(args)..., &count, nullptr);
-		result.resize(count);
-		if (count) {
-			f(std::forward<Args>(args)..., &count, result.data());
-		}
-		return result;
-	} else if constexpr (std::is_same_v<
-		typename Common::FunctionPointer<F>::Return,
-		VkResult
-	>) {
-		auto count = uint32_t{};
-		std::vector<T> result;
-		vulkanSafe(what, f, std::forward<Args>(args)..., &count, nullptr);
-		result.resize(count);
-		if (count) {
-			vulkanSafe(what, f, std::forward<Args>(args)..., &count, result.data());
-		}
-		return result;
-	} else {
-		//static_assert(false, "I don't know how to handle this");
-		throw Common::Exception() << "I don't know how to handle this";
-	}
-}
-
-#define VULKAN_ENUM_SAFE(T, f, ...) (vulkanEnum<T>(std::string(FILE_AND_LINE " " #f, (f), __VA_ARGS__))
-
 template<typename real>
 real degToRad(real x) {
 	return x * (real)(M_PI / 180.);
 }
-
-auto & assertHandle(auto & x, char const * where) {
-	if (!x) throw Common::Exception() << "returned an empty handle at " << where;
-	return x;
-}
-auto const & assertHandle(auto const & x, char const * where) {
-	if (!x) throw Common::Exception() << "returned an empty handle at " << where;
-	return x;
-}
-auto && assertHandle(auto && x, char const * where) {
-	if (!x) throw Common::Exception() << "returned an empty handle at " << where;
-	return std::move(x);
-}
-#define ASSERTHANDLE(x) assertHandle(x, FILE_AND_LINE)
 
 //TODO put this somewhere
 namespace Common {
@@ -252,39 +182,6 @@ struct UniformBufferObject {
 };
 static_assert(sizeof(UniformBufferObject) == 4 * 4 * sizeof(float) * 3);
 
-struct ThisVulkanDebugMessenger {
-	static auto create(
-		vk::Instance const & instance
-	) {
-#if 0 // how do I compile this?		
-		obj = vk::DebugUtilsMessengerEXT(
-			instance,
-			vk::DebugUtilsMessengerCreateInfoEXT(
-				{},
-				vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose 
-					| vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning
-					| vk::DebugUtilsMessageSeverityFlagBitsEXT::eError,
-				vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral
-					| vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation
-					| vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance,
-				debugCallback
-			)	
-		);
-#endif
-		return vk::DebugUtilsMessengerEXT();
-	}
-
-// app-specific callback
-protected:
-	static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity, VkDebugUtilsMessageTypeFlagsEXT messageType, const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData) {
-		std::cerr << "validation layer: " << pCallbackData->pMessage << std::endl;
-		return VK_FALSE;
-	}
-};
-
-
-// ************** from here on down, app-specific **************
-
 
 struct ThisVulkanInstance {
 
@@ -295,37 +192,21 @@ struct ThisVulkanInstance {
 		bool const enableValidationLayers
 	) {
 		// debug output
-
-		{
-#if 1
-			auto availableLayers = vulkanEnum<VkLayerProperties>(
-				NAME_PAIR(vkEnumerateInstanceLayerProperties)
-			);
-#else
-			std::vector<VkLayerProperties> availableLayers = VULKAN_ENUM_SAFE(
-				VkLayerProperties,
-				vkEnumerateInstanceLayerProperties,
-				std::make_tuple()
-			);
-#endif
-			std::cout << "vulkan layers:" << std::endl;
-			for (auto const & layer : availableLayers) {
-				std::cout << "\t" << layer.layerName << std::endl;
-			}
+		std::cout << "vulkan layers:" << std::endl;
+		for (auto const & layer : vk::enumerateInstanceLayerProperties()) {
+			std::cout << "\t" << layer.layerName.data() << std::endl;
 		}
 
-		// VkApplicationInfo needs title:
+		// vk::ApplicationInfo needs title:
 		auto title = app->getTitle();
 		
 		// vkCreateInstance needs appInfo
-		auto appInfo = VkApplicationInfo{
-			.sType = (VkStructureType)vk::StructureType::eApplicationInfo,
-			.pApplicationName = title.c_str(),
-			.applicationVersion = VK_MAKE_VERSION(1, 0, 0),
-			.pEngineName = "No Engine",
-			.engineVersion = VK_MAKE_VERSION(1, 0, 0),
-			.apiVersion = VK_API_VERSION_1_0,
-		};
+		auto appInfo = vk::ApplicationInfo()
+			.setPApplicationName(title.c_str())
+			.setApplicationVersion(VK_MAKE_VERSION(1, 0, 0))
+			.setPEngineName("No Engine")
+			.setEngineVersion(VK_MAKE_VERSION(1, 0, 0))
+			.setApiVersion(VK_API_VERSION_1_0);
 
 		// vkCreateInstance needs layerNames
 		std::vector<char const *> layerNames;
@@ -338,19 +219,12 @@ struct ThisVulkanInstance {
 		// vkCreateInstance needs extensions
 		auto extensions = getRequiredExtensions(app, enableValidationLayers);
 
-		// would be nice to do a parent-constructor-call here
-		//  but I can't move this into a static method that passes it into super
-		//  because the result uses pointers to other stack/temp objects
-		auto createInfo = VkInstanceCreateInfo{
-			.sType = (VkStructureType)vk::StructureType::eInstanceCreateInfo,
-			.pApplicationInfo = &appInfo,
-			.enabledLayerCount = (uint32_t)layerNames.size(),
-			.ppEnabledLayerNames = layerNames.data(),
-			.enabledExtensionCount = (uint32_t)extensions.size(),
-			.ppEnabledExtensionNames = extensions.data(),
-		};
-		
-		return vk::createInstance(createInfo);
+		return vk::createInstance(
+			vk::InstanceCreateInfo()
+				.setPApplicationInfo(&appInfo)
+				.setPEnabledLayerNames(layerNames)
+				.setPEnabledExtensionNames(extensions)
+		);
 	}
 
 protected:
@@ -440,7 +314,7 @@ protected:
 			auto swapChainSupport = querySwapChainSupport(physDev, surface);
 			swapChainAdequate = !swapChainSupport.formats.empty() && !swapChainSupport.presentModes.empty();
 		}
-		VkPhysicalDeviceFeatures features = physDev.getFeatures();
+		vk::PhysicalDeviceFeatures features = physDev.getFeatures();
 		return indices.isComplete()
 			&& extensionsSupported
 			&& swapChainAdequate
@@ -1594,6 +1468,17 @@ protected:
 	vk::PhysicalDevice physicalDevice;
 	vk::SampleCountFlagBits msaaSamples = vk::SampleCountFlagBits::e1;
 
+protected:	
+	static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
+		VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+		VkDebugUtilsMessageTypeFlagsEXT messageType,
+		VkDebugUtilsMessengerCallbackDataEXT const * pCallbackData,
+		void * pUserData
+	) {
+		std::cerr << "validation layer: " << pCallbackData->pMessage << std::endl;
+		return VK_FALSE;
+	}
+
 public:
 	VulkanCommon(::SDLApp::SDLApp const * const app_)
 	: app(app_) {
@@ -1605,7 +1490,22 @@ public:
 		instance = ThisVulkanInstance::create(app, enableValidationLayers);
 		
 		if (enableValidationLayers) {
-			debug = ThisVulkanDebugMessenger::create(instance);
+#if 0 // how do I compile this?		
+			debug = vk::DebugUtilsMessengerEXT(
+				instance,
+				vk::DebugUtilsMessengerCreateInfoEXT(
+					{},
+					vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose 
+						| vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning
+						| vk::DebugUtilsMessageSeverityFlagBitsEXT::eError,
+					vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral
+						| vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation
+						| vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance,
+					debugCallback
+				)	
+			);
+#endif
+			debug = vk::DebugUtilsMessengerEXT();
 		}
 		
 		{
@@ -1747,13 +1647,12 @@ public:
 protected:
 	// this is out of place
 	static bool checkValidationLayerSupport() {
-		auto availableLayers = vulkanEnum<VkLayerProperties>(
-			NAME_PAIR(vkEnumerateInstanceLayerProperties)
-		);
+		auto availableLayers = vk::enumerateInstanceLayerProperties();
 		for (char const * const layerName : validationLayers) {
 			bool layerFound = false;
 			for (auto const & layerProperties : availableLayers) {
-				if (!strcmp(layerName, layerProperties.layerName)) {
+				// hmm, why does vulkan hpp use array<char> instead of string?
+				if (!strcmp(layerName, layerProperties.layerName.data())) {
 					layerFound = true;
 					break;
 				}
