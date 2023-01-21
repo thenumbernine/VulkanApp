@@ -389,7 +389,7 @@ public:
 
 public:
 	static auto findDepthFormat(
-		vk::PhysicalDevice physDev
+		vk::raii::PhysicalDevice const & physDev
 	) {
 		return findSupportedFormat(
 			physDev,
@@ -405,7 +405,7 @@ public:
 
 protected:
 	static vk::Format findSupportedFormat(
-		vk::PhysicalDevice physDev,
+		vk::raii::PhysicalDevice const & physDev,
 		std::vector<vk::Format> const & candidates,
 		vk::ImageTiling const tiling,
 		vk::FormatFeatureFlags const features
@@ -493,8 +493,8 @@ namespace VulkanDevice {
 
 struct VulkanRenderPass  {
 	static auto create(
-		vk::PhysicalDevice const physicalDevice,
-		vk::Device const & device,
+		vk::raii::PhysicalDevice const physicalDevice,
+		vk::raii::Device const & device,
 		vk::Format swapChainImageFormat,
 		vk::SampleCountFlagBits msaaSamples
 	) {
@@ -562,7 +562,8 @@ struct VulkanRenderPass  {
 					vk::AccessFlagBits::eDepthStencilAttachmentWrite
 				)
 		);
-		return device.createRenderPass(
+		return std::make_unique<vk::raii::RenderPass>(
+			device,
 			vk::RenderPassCreateInfo()
 				.setAttachments(attachments)
 				.setSubpasses(subpasses)
@@ -997,7 +998,7 @@ struct VulkanSwapChain {
 protected:
 	std::unique_ptr<vk::raii::SwapchainKHR> obj;
 	//owned
-	vk::RenderPass renderPass;
+	std::unique_ptr<vk::raii::RenderPass> renderPass;
 
 	std::unique_ptr<vk::raii::Image> depthImage;
 	std::unique_ptr<vk::raii::DeviceMemory> depthImageMemory;
@@ -1020,7 +1021,7 @@ public:
 	
 public:
 	auto const & operator()() const { return *obj; }
-	auto const & getRenderPass() const { return renderPass; }
+	auto const & getRenderPass() const { return *renderPass; }
 
 	~VulkanSwapChain() {
 		depthImageView = {};
@@ -1099,8 +1100,8 @@ public:
 		}
 	
 		renderPass = VulkanRenderPass::create(
-			*physicalDevice,
-			*device,
+			physicalDevice,
+			device,
 			surfaceFormat.format,
 			msaaSamples
 		);
@@ -1129,7 +1130,7 @@ public:
 		);
 		
 		//createDepthResources
-		auto depthFormat = VulkanPhysicalDevice::findDepthFormat(*physicalDevice);
+		auto depthFormat = VulkanPhysicalDevice::findDepthFormat(physicalDevice);
 		std::tie(depthImage, depthImageMemory) 
 		= VulkanDeviceMemoryImage::createImage(
 			physicalDevice,
@@ -1161,7 +1162,7 @@ public:
 				vk::raii::Framebuffer(
 					device,
 					vk::FramebufferCreateInfo()
-						.setRenderPass(renderPass)
+						.setRenderPass(**renderPass)
 						.setAttachments(attachments)
 						.setWidth(extent.width)
 						.setHeight(extent.height)
@@ -1255,30 +1256,21 @@ namespace VulkanShaderModule {
 struct VulkanGraphicsPipeline  {
 protected:
 	//owned:
-	vk::Pipeline obj;
-	vk::PipelineLayout pipelineLayout;
-	vk::DescriptorSetLayout descriptorSetLayout;
+	std::unique_ptr<vk::raii::Pipeline> obj;
+	std::unique_ptr<vk::raii::PipelineLayout> pipelineLayout;
+	std::unique_ptr<vk::raii::DescriptorSetLayout> descriptorSetLayout;
 	
 	//held:
-	vk::Device const device;				//held for dtor
+	vk::raii::Device const & device;				//held for dtor
 public:
 	auto const & operator()() const { return obj; }
 	auto const & getPipelineLayout() const { return pipelineLayout; }
-	
-	vk::DescriptorSetLayout const & getDescriptorSetLayout() {
-		return descriptorSetLayout;
-	}
-
-	~VulkanGraphicsPipeline() {
-		device.destroyPipelineLayout(pipelineLayout);
-		device.destroyDescriptorSetLayout(descriptorSetLayout);
-		device.destroyPipeline(obj);
-	}
+	auto const & getDescriptorSetLayout() const { return descriptorSetLayout; }
 
 	VulkanGraphicsPipeline(
-		vk::PhysicalDevice const physicalDevice,
-		vk::Device const device_,
-		vk::RenderPass const renderPass,
+		vk::raii::PhysicalDevice const & physicalDevice,
+		vk::raii::Device const & device_,
+		vk::raii::RenderPass const & renderPass,
 		vk::SampleCountFlagBits msaaSamples
 	) : device(device_) {
 		
@@ -1297,18 +1289,19 @@ public:
 				.setStageFlags(vk::ShaderStageFlagBits::eFragment)
 			
 		);
-		descriptorSetLayout = device.createDescriptorSetLayout(
+		descriptorSetLayout = std::make_unique<vk::raii::DescriptorSetLayout>(
+			device,
 			vk::DescriptorSetLayoutCreateInfo()
 				.setBindings(bindings)
 		);
 
 		auto vertShaderModule = VulkanShaderModule::fromFile(
-			device,
+			*device,
 			"shader-vert.spv"
 		);
 		
 		auto fragShaderModule = VulkanShaderModule::fromFile(
-			device,
+			*device,
 			"shader-frag.spv"
 		);
 		
@@ -1373,9 +1366,10 @@ public:
 			.setDynamicStates(dynamicStates);
 		
 		auto descriptorSetLayouts = Common::make_array(
-			descriptorSetLayout
+			**descriptorSetLayout
 		);
-		pipelineLayout = device.createPipelineLayout(
+		pipelineLayout = std::make_unique<vk::raii::PipelineLayout>(
+			device,
 			vk::PipelineLayoutCreateInfo()
 				.setSetLayouts(descriptorSetLayouts)
 		);
@@ -1394,29 +1388,29 @@ public:
 			vertShaderStageInfo,
 			fragShaderStageInfo
 		);
-		auto infos = Common::make_array(
-			vk::GraphicsPipelineCreateInfo()
-				.setStages(shaderStages)
-				.setPVertexInputState(&vertexInputInfo)
-				.setPInputAssemblyState(&inputAssembly)
-				.setPViewportState(&viewportState)
-				.setPRasterizationState(&rasterizer)
-				.setPMultisampleState(&multisampling)
-				.setPDepthStencilState(&depthStencil)
-				.setPColorBlendState(&colorBlending)
-				.setPDynamicState(&dynamicState)
-				.setLayout(pipelineLayout)
-				.setRenderPass(renderPass)
-				.setSubpass(0)
-				.setBasePipelineHandle(vk::Pipeline())
+		auto info = vk::GraphicsPipelineCreateInfo()
+			.setStages(shaderStages)
+			.setPVertexInputState(&vertexInputInfo)
+			.setPInputAssemblyState(&inputAssembly)
+			.setPViewportState(&viewportState)
+			.setPRasterizationState(&rasterizer)
+			.setPMultisampleState(&multisampling)
+			.setPDepthStencilState(&depthStencil)
+			.setPColorBlendState(&colorBlending)
+			.setPDynamicState(&dynamicState)
+			.setLayout(**pipelineLayout)
+			.setRenderPass(*renderPass)
+			.setSubpass(0)
+			.setBasePipelineHandle(vk::Pipeline());
+		obj = std::make_unique<vk::raii::Pipeline>(
+			device,
+			nullptr,//vk::Optional<vk::raii::PipelineCache>(),
+			info,
+			nullptr	
 		);
-		obj = device.createGraphicsPipelines(
-			vk::PipelineCache{},
-			infos 
-		).value[0];
 	
-		device.destroyShaderModule(vertShaderModule);
-		device.destroyShaderModule(fragShaderModule);
+		(*device).destroyShaderModule(vertShaderModule);
+		(*device).destroyShaderModule(fragShaderModule);
 	}
 };
 
@@ -1561,8 +1555,8 @@ public:
 			msaaSamples
 		);
 		graphicsPipeline = std::make_unique<VulkanGraphicsPipeline>(
-			**physicalDevice,
-			**device,
+			*physicalDevice,
+			*device,
 			swapChain->getRenderPass(),
 			msaaSamples
 		);
@@ -1988,7 +1982,7 @@ protected:
 		);
 		commandBuffer.beginRenderPass(
 			vk::RenderPassBeginInfo()
-				.setRenderPass(swapChain->getRenderPass())
+				.setRenderPass(*swapChain->getRenderPass())
 				.setFramebuffer(*swapChain->framebuffers[imageIndex])
 				.setRenderArea(
 					vk::Rect2D()
@@ -2001,7 +1995,7 @@ protected:
 		{
 			commandBuffer.bindPipeline(
 				vk::PipelineBindPoint::eGraphics,
-				(*graphicsPipeline)()
+				**(*graphicsPipeline)()
 			);
 
 			commandBuffer.setViewport(
@@ -2039,7 +2033,7 @@ protected:
 
 			commandBuffer.bindDescriptorSets(
 				vk::PipelineBindPoint::eGraphics,
-				graphicsPipeline->getPipelineLayout(),
+				**graphicsPipeline->getPipelineLayout(),
 				0,
 				*descriptorSets[currentFrame],
 				{}
@@ -2070,7 +2064,7 @@ protected:
 	}
 
 	void createDescriptorSets() {
-		std::vector<vk::DescriptorSetLayout> layouts(maxFramesInFlight, graphicsPipeline->getDescriptorSetLayout());
+		std::vector<vk::DescriptorSetLayout> layouts(maxFramesInFlight, **graphicsPipeline->getDescriptorSetLayout());
 		descriptorSets = device->allocateDescriptorSets(
 			vk::DescriptorSetAllocateInfo()
 				.setDescriptorPool(**descriptorPool)
