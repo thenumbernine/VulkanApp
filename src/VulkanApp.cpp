@@ -1547,7 +1547,7 @@ protected:
 	VulkanDevice device;
 	VulkanSwapChain swapChain;
 	VulkanGraphicsPipeline graphicsPipeline;
-	std::unique_ptr<VulkanCommandPool> commandPool;
+	VulkanCommandPool commandPool;
 	
 	std::unique_ptr<VulkanBufferAndMemory> vertexBufferAndMemory;
 	std::unique_ptr<VulkanBufferAndMemory> indexBufferAndMemory;
@@ -1656,23 +1656,22 @@ public:
 			device(),
 			swapChain.getRenderPass(),
 			msaaSamples
-		))
-	{
-		
-		{
+		)),
+		commandPool([this](){
 			auto queueFamilyIndices = VulkanPhysicalDevice::findQueueFamilies(
 				physicalDevice,
 				surface
 			);
-			commandPool = std::make_unique<VulkanCommandPool>(
+			return VulkanCommandPool(
 				device(),
 				device.getGraphicsQueue(),
 				vk::CommandPoolCreateInfo()
 					.setFlags(vk::CommandPoolCreateFlagBits::eResetCommandBuffer)
 					.setQueueFamilyIndex(queueFamilyIndices.graphicsFamily.value())
-			);
-		}
-		
+			);	
+		}())
+	{
+	
 		createTextureImage();
 	   
 		textureImageView = VulkanSwapChain::createImageView(
@@ -1707,7 +1706,7 @@ public:
 		vertexBufferAndMemory = VulkanDeviceMemoryBuffer::makeBufferFromStaged(
 			physicalDevice,
 			device(),
-			*commandPool,
+			commandPool,
 			vertices.data(),
 			sizeof(vertices[0]) * vertices.size()
 		);
@@ -1715,7 +1714,7 @@ public:
 		indexBufferAndMemory = VulkanDeviceMemoryBuffer::makeBufferFromStaged(
 			physicalDevice,
 			device(),
-			*commandPool,
+			commandPool,
 			indices.data(),
 			sizeof(indices[0]) * indices.size()
 		);
@@ -1784,8 +1783,6 @@ public:
 		textureSampler = {};
 		textureImageView = {};
 		textureImageAndMemory = {};
-		
-		commandPool = {};
 	}
 
 protected:
@@ -1843,7 +1840,7 @@ protected:
 		textureImageAndMemory = VulkanDeviceMemoryImage::makeTextureFromStaged(
 			physicalDevice,
 			device(),
-			*commandPool,
+			commandPool,
 			srcData,
 			bufferSize,
 			texSize.x,
@@ -1877,7 +1874,7 @@ protected:
 		VulkanSingleTimeCommand commandBuffer(
 			device(),
 			device.getGraphicsQueue(),
-			(*commandPool)()
+			commandPool()
 		);
 
 		auto barrier = vk::ImageMemoryBarrier()
@@ -2039,7 +2036,7 @@ protected:
 		// TODO this matches 'VulkanSingleTimeCommand' ctor
 		commandBuffers = device().allocateCommandBuffers(
 			vk::CommandBufferAllocateInfo()
-				.setCommandPool(*(*commandPool)())
+				.setCommandPool(*commandPool())
 				.setLevel(vk::CommandBufferLevel::ePrimary)
 				.setCommandBufferCount(maxFramesInFlight)
 		);
