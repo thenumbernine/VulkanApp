@@ -1716,8 +1716,6 @@ public:
 			if (enableValidationLayers && !checkValidationLayerSupport()) {
 				throw Common::Exception() << "validation layers requested, but not available!";
 			}
-			
-			// hmm, maybe instance should be a shared_ptr and then passed to debug, surface, and physicalDevice ?
 			return VulkanInstance::create(ctx, app, enableValidationLayers);
 		}()),
 		debug(!enableValidationLayers 
