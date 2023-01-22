@@ -512,8 +512,7 @@ public:
 		)),
 		graphicsQueue(device, indices.graphicsFamily.value(), 0),
 		presentQueue(device, indices.presentFamily.value(), 0)
-	{
-	}
+	{}
 };
 
 struct VulkanRenderPass  {
@@ -602,30 +601,25 @@ protected:
 	//owns:
 	std::vector<vk::raii::CommandBuffer> cmds;
 	//held:
-	vk::raii::Device const & device;
 	vk::raii::Queue const & queue;
-	vk::raii::CommandPool const & commandPool;
-
 public:
 	auto const & operator()() const { return cmds[0]; }
 
 	VulkanSingleTimeCommand(
-		vk::raii::Device const & device_,
+		vk::raii::Device const & device,
 		vk::raii::Queue const & queue_,
-		vk::raii::CommandPool const & commandPool_
+		vk::raii::CommandPool const & commandPool
 	) : 
 		cmds(
-			device_.allocateCommandBuffers(
-	//			commandPool_,
+			device.allocateCommandBuffers(
+	//			commandPool,
 				vk::CommandBufferAllocateInfo()
-					.setCommandPool(*commandPool_)
+					.setCommandPool(*commandPool)
 					.setLevel(vk::CommandBufferLevel::ePrimary)
 					.setCommandBufferCount(1)
 			)
 		),
-		device(device_),
-		queue(queue_),
-		commandPool(commandPool_)
+		queue(queue_)
 	{
 		// end part that matches
 		// and this part kinda matches the start of 'recordCommandBuffer'
@@ -649,7 +643,7 @@ public:
 	}
 };
 
-struct VulkanCommandPool  {
+struct VulkanCommandPool {
 protected:
 	//owns:
 	vk::raii::CommandPool commandPool;
@@ -1515,6 +1509,92 @@ public:
 	}
 };
 
+struct VulkanMesh {
+protected:
+	std::unique_ptr<VulkanBufferAndMemory> vertexBufferAndMemory;
+	std::unique_ptr<VulkanBufferAndMemory> indexBufferAndMemory;
+	uint32_t numIndices = {};
+public:
+	auto const & getVertexes() const { return *vertexBufferAndMemory; }
+	auto const & getIndexes() const { return *indexBufferAndMemory; }
+	uint32_t getNumIndexes() const { return numIndices; }
+
+	VulkanMesh(
+		std::unique_ptr<VulkanBufferAndMemory> && vertexBufferAndMemory_,
+		std::unique_ptr<VulkanBufferAndMemory> && indexBufferAndMemory_,
+		uint32_t numIndices_
+	) : vertexBufferAndMemory(std::move(vertexBufferAndMemory_)),
+		indexBufferAndMemory(std::move(indexBufferAndMemory_)),
+		numIndices(numIndices_)
+	{}
+
+	static VulkanMesh create(
+		std::string const & modelPath,
+		vk::raii::PhysicalDevice const & physicalDevice,
+		vk::raii::Device const & device,
+		VulkanCommandPool const & commandPool
+	) {
+		
+		tinyobj::attrib_t attrib;
+		std::vector<tinyobj::shape_t> shapes;
+		std::vector<tinyobj::material_t> materials;
+		std::string warn, err;
+		if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, modelPath.c_str())) {
+			throw Common::Exception() << warn << err;
+		}
+
+		std::vector<Vertex> vertices;
+		std::vector<uint32_t> indices;
+		std::unordered_map<Vertex, uint32_t> uniqueVertices;
+		for (auto const & shape : shapes) {
+			for (auto const & index : shape.mesh.indices) {
+				Vertex vertex;
+				vertex.pos = {
+					attrib.vertices[3 * index.vertex_index + 0],
+					attrib.vertices[3 * index.vertex_index + 1],
+					attrib.vertices[3 * index.vertex_index + 2]
+				};
+
+				vertex.color = {1.0f, 1.0f, 1.0f};
+				
+				vertex.texCoord = {
+					attrib.texcoords[2 * index.texcoord_index + 0],
+					1.0f - attrib.texcoords[2 * index.texcoord_index + 1]
+				};
+
+
+				if (uniqueVertices.count(vertex) == 0) {
+					uniqueVertices[vertex] = (uint32_t)vertices.size();
+					vertices.push_back(vertex);
+				}
+
+				indices.push_back(uniqueVertices[vertex]);
+			}
+		}
+		
+		auto vertexBufferAndMemory = VulkanDeviceMemoryBuffer::makeBufferFromStaged(
+			physicalDevice,
+			device,
+			commandPool,
+			vertices.data(),
+			sizeof(vertices[0]) * vertices.size()
+		);
+		uint32_t numIndices = indices.size();
+		auto indexBufferAndMemory = VulkanDeviceMemoryBuffer::makeBufferFromStaged(
+			physicalDevice,
+			device,
+			commandPool,
+			indices.data(),
+			sizeof(indices[0]) * indices.size()
+		);
+		return VulkanMesh(
+			std::move(vertexBufferAndMemory),
+			std::move(indexBufferAndMemory),
+			std::move(numIndices)
+		);
+	}
+};
+
 // so I don't have to prefix all my fields and names
 struct VulkanCommon {
 protected:
@@ -1549,17 +1629,14 @@ protected:
 	VulkanGraphicsPipeline graphicsPipeline;
 	VulkanCommandPool commandPool;
 	
-	std::unique_ptr<VulkanBufferAndMemory> vertexBufferAndMemory;
-	std::unique_ptr<VulkanBufferAndMemory> indexBufferAndMemory;
-	
+	//these two are initialized together:
 	uint32_t mipLevels = {};
-
 	std::unique_ptr<VulkanImageAndMemory> textureImageAndMemory;
-	std::unique_ptr<vk::raii::ImageView> textureImageView;
-	std::unique_ptr<vk::raii::Sampler> textureSampler;
 	
-	std::vector<Vertex> vertices;
-	std::vector<uint32_t> indices;
+	std::unique_ptr<vk::raii::ImageView> textureImageView;
+	vk::raii::Sampler textureSampler;
+
+	VulkanMesh mesh;
 
 	// hmm combine these two into a class?
 	std::vector<std::unique_ptr<VulkanBufferAndMemory>> uniformBuffers;
@@ -1669,20 +1746,16 @@ public:
 					.setFlags(vk::CommandPoolCreateFlagBits::eResetCommandBuffer)
 					.setQueueFamilyIndex(queueFamilyIndices.graphicsFamily.value())
 			);	
-		}())
-	{
-	
-		createTextureImage();
-	   
-		textureImageView = VulkanSwapChain::createImageView(
+		}()),
+		textureImageAndMemory(createTextureImage()),
+		textureImageView(VulkanSwapChain::createImageView(
 			device(),
 			*textureImageAndMemory->getImage(),
 			vk::Format::eR8G8B8A8Srgb,
 			vk::ImageAspectFlagBits::eColor,
 			mipLevels
-		);
-
-		textureSampler = std::make_unique<vk::raii::Sampler>(
+		)),
+		textureSampler(
 			device(),
 			vk::SamplerCreateInfo()
 				.setMagFilter(vk::Filter::eLinear)
@@ -1699,26 +1772,14 @@ public:
 				.setMaxLod((float)mipLevels)
 				.setBorderColor(vk::BorderColor::eIntOpaqueBlack)
 				.setUnnormalizedCoordinates(false)
-		);
-
-		loadModel();
-		
-		vertexBufferAndMemory = VulkanDeviceMemoryBuffer::makeBufferFromStaged(
+		),
+		mesh(VulkanMesh::create(
+			modelPath,
 			physicalDevice,
 			device(),
-			commandPool,
-			vertices.data(),
-			sizeof(vertices[0]) * vertices.size()
-		);
-
-		indexBufferAndMemory = VulkanDeviceMemoryBuffer::makeBufferFromStaged(
-			physicalDevice,
-			device(),
-			commandPool,
-			indices.data(),
-			sizeof(indices[0]) * indices.size()
-		);
-
+			commandPool
+		))
+	{
 		for (size_t i = 0; i < maxFramesInFlight; i++) {
 			uniformBuffers.push_back(
 				VulkanDeviceMemoryBuffer::create(
@@ -1774,15 +1835,6 @@ public:
 		inFlightFences.clear();
 
 		descriptorPool = {};
-
-		uniformBuffers.clear();
-		
-		indexBufferAndMemory = {};
-		vertexBufferAndMemory = {};
-
-		textureSampler = {};
-		textureImageView = {};
-		textureImageAndMemory = {};
 	}
 
 protected:
@@ -1807,8 +1859,10 @@ protected:
 
 
 protected:
-	void createTextureImage() {
-		std::shared_ptr<Image::Image> image = std::dynamic_pointer_cast<Image::Image>(Image::system->read(texturePath));
+	//also initializes mipLevels
+	decltype(textureImageAndMemory)
+	createTextureImage() {
+		auto image = std::dynamic_pointer_cast<Image::Image>(Image::system->read(texturePath));
 		if (!image) {
 			throw Common::Exception() << "failed to load image from " << texturePath;
 		}
@@ -1837,7 +1891,7 @@ protected:
 		vk::DeviceSize const bufferSize = texSize.x * texSize.y * texBPP;
 		mipLevels = (uint32_t)std::floor(std::log2(std::max(texSize.x, texSize.y))) + 1;
 	
-		textureImageAndMemory = VulkanDeviceMemoryImage::makeTextureFromStaged(
+		auto textureImageAndMemory = VulkanDeviceMemoryImage::makeTextureFromStaged(
 			physicalDevice,
 			device(),
 			commandPool,
@@ -1855,6 +1909,8 @@ protected:
 			texSize.y,
 			mipLevels
 		);
+
+		return textureImageAndMemory;
 	}
 
 	void generateMipmaps(
@@ -1976,44 +2032,6 @@ protected:
 		);
 	}
 
-	void loadModel() {
-		tinyobj::attrib_t attrib;
-		std::vector<tinyobj::shape_t> shapes;
-		std::vector<tinyobj::material_t> materials;
-		std::string warn, err;
-		if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, modelPath.c_str())) {
-			throw Common::Exception() << warn << err;
-		}
-
-		std::unordered_map<Vertex, uint32_t> uniqueVertices;
-
-		for (const auto& shape : shapes) {
-			for (const auto& index : shape.mesh.indices) {
-				Vertex vertex;
-
-				vertex.pos = {
-					attrib.vertices[3 * index.vertex_index + 0],
-					attrib.vertices[3 * index.vertex_index + 1],
-					attrib.vertices[3 * index.vertex_index + 2]
-				};
-
-				vertex.texCoord = {
-					attrib.texcoords[2 * index.texcoord_index + 0],
-					1.0f - attrib.texcoords[2 * index.texcoord_index + 1]
-				};
-
-				vertex.color = {1.0f, 1.0f, 1.0f};
-
-				if (uniqueVertices.count(vertex) == 0) {
-					uniqueVertices[vertex] = (uint32_t)vertices.size();
-					vertices.push_back(vertex);
-				}
-
-				indices.push_back(uniqueVertices[vertex]);
-			}
-		}
-	}
-
 	void recreateSwapChain() {
 #if 0 //hmm why are there multiple events?
 		int width = app->getScreenSize().x;
@@ -2097,13 +2115,13 @@ protected:
 			commandBuffer.bindVertexBuffers(
 				0,
 				Common::make_array(
-					*vertexBufferAndMemory->getBuffer()
+					*mesh.getVertexes().getBuffer()
 				),
 				Common::make_array<vk::DeviceSize>(0)
 			);
 
 			commandBuffer.bindIndexBuffer(
-				*indexBufferAndMemory->getBuffer(),
+				*mesh.getIndexes().getBuffer(),
 				0,
 				vk::IndexType::eUint32
 			);
@@ -2117,7 +2135,7 @@ protected:
 			);
 
 			commandBuffer.drawIndexed(
-				(uint32_t)indices.size(),
+				mesh.getNumIndexes(),
 				1,
 				0,
 				0,
@@ -2157,7 +2175,7 @@ protected:
 				.setBuffer(*uniformBuffers[i]->getBuffer())
 				.setRange(sizeof(UniformBufferObject));
 			auto imageInfo = vk::DescriptorImageInfo()
-				.setSampler(**textureSampler)
+				.setSampler(*textureSampler)
 				.setImageView(**textureImageView)
 				.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
 			auto descriptorWrites = Common::make_array(
