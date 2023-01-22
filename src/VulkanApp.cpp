@@ -33,9 +33,9 @@ namespace Common {
 template <typename... T>
 constexpr auto make_array(T&&... values)
 -> std::array<
-	typename std::decay<
-		typename std::common_type<T...>::type
-	>::type,
+	typename std::decay_t<
+		typename std::common_type_t<T...>
+	>,
 	sizeof...(T)
 > {
 	return std::array<
@@ -47,13 +47,13 @@ constexpr auto make_array(T&&... values)
 }
 
 // https://stackoverflow.com/questions/51307168/how-to-fill-a-c-container-using-a-lambda-function
-// TODO the last one or something
+// TODO use the last one in stackoverflow or something
+// TOOD can't get it to work without explicit template of T
 template<typename T, typename F>
-std::vector<T>
-generate_vector(
+constexpr auto generate_vector(
 	size_t n,
 	F f
-) {
+) -> std::vector<std::decay_t<T>> {
 	std::vector<T> v;
 	std::generate_n(std::back_inserter(v), n, f);
 	return v;
@@ -1865,19 +1865,25 @@ public:
 					.setCommandBufferCount(maxFramesInFlight)
 			)
 			// end part that matches
-		)
-	{
-		initSyncObjects();
-	}
-
-public:
-	~VulkanCommon() {
-		// vector of unique pointers, can't use `= {}`, gotta use `.clear()`
-		commandBuffers.clear();
-		imageAvailableSemaphores.clear();
-		renderFinishedSemaphores.clear();
-		inFlightFences.clear();
-	}
+		),
+		imageAvailableSemaphores(Common::generate_vector<vk::raii::Semaphore>(
+			maxFramesInFlight,
+			[this]() { return device().createSemaphore({}); }
+		)),
+		renderFinishedSemaphores(Common::generate_vector<vk::raii::Semaphore>(
+			maxFramesInFlight,
+			[this]() { return device().createSemaphore({}); }
+		)),
+		inFlightFences(Common::generate_vector<vk::raii::Fence>(
+			maxFramesInFlight,
+			[this]() { 
+				return device().createFence(
+					vk::FenceCreateInfo()
+						.setFlags(vk::FenceCreateFlagBits::eSignaled)
+				);
+			}
+		))
+	{}
 
 protected:
 	// this is out of place
@@ -2176,21 +2182,6 @@ protected:
 
 		commandBuffer.endRenderPass();
 		commandBuffer.end();
-	}
-
-	void initSyncObjects() {
-		for (size_t i = 0; i < maxFramesInFlight; i++) {
-			imageAvailableSemaphores.push_back(device().createSemaphore({}));
-		}
-		for (size_t i = 0; i < maxFramesInFlight; i++) {
-			renderFinishedSemaphores.push_back(device().createSemaphore({}));
-		}
-		for (size_t i = 0; i < maxFramesInFlight; i++) {
-			inFlightFences.push_back(device().createFence(
-				vk::FenceCreateInfo()
-					.setFlags(vk::FenceCreateFlagBits::eSignaled)
-			));
-		}
 	}
 
 protected:
