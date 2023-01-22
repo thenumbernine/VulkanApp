@@ -836,15 +836,15 @@ public:
 
 struct VulkanBufferMemoryAndMapped {
 protected:	
-	std::unique_ptr<VulkanBufferAndMemory> bm;
+	VulkanBufferAndMemory bm;
 	void * mapped = {};
 public:
-	auto const & getBuffer() const { return bm->getBuffer(); }
-	auto const & getMemory() const { return bm->getMemory(); }
+	auto const & getBuffer() const { return bm.getBuffer(); }
+	auto const & getMemory() const { return bm.getMemory(); }
 	void * getMapped() { return mapped; }
 	
 	VulkanBufferMemoryAndMapped(
-		std::unique_ptr<VulkanBufferAndMemory> && bm_,
+		VulkanBufferAndMemory && bm_,
 		void * && mapped_
 	) :	bm(std::move(bm_)),
 		mapped(std::move(mapped_))
@@ -902,7 +902,7 @@ namespace VulkanDeviceMakeFromStagingBuffer {
 		memcpy(dstData, srcData, (size_t)bufferSize);
 		memory.unmapMemory();
 		
-		return std::make_unique<VulkanBufferAndMemory>(std::move(buffer), std::move(memory));
+		return VulkanBufferAndMemory(std::move(buffer), std::move(memory));
 	}
 };
 
@@ -938,7 +938,7 @@ namespace VulkanDeviceMemoryBuffer  {
 			*memory,
 			0
 		);
-		return std::make_unique<VulkanBufferAndMemory>(std::move(buffer), std::move(memory));
+		return VulkanBufferAndMemory(std::move(buffer), std::move(memory));
 	}
 
 	auto makeBufferFromStaged(
@@ -965,8 +965,8 @@ namespace VulkanDeviceMemoryBuffer  {
 		);
 		
 		commandPool.copyBuffer(
-			*stagingBufferAndMemory->getBuffer(),
-			*bufferAndMemory->getBuffer(),
+			*stagingBufferAndMemory.getBuffer(),
+			*bufferAndMemory.getBuffer(),
 			bufferSize
 		);
 
@@ -1015,7 +1015,7 @@ namespace VulkanDeviceMemoryImage {
 				))
 		);
 		(*device).bindImageMemory(*image, *imageMemory, 0);
-		return std::make_unique<VulkanImageAndMemory>(std::move(image), std::move(imageMemory));
+		return VulkanImageAndMemory(std::move(image), std::move(imageMemory));
 	}
 
 	auto makeTextureFromStaged(
@@ -1051,20 +1051,20 @@ namespace VulkanDeviceMemoryImage {
 		);
 
 		commandPool.transitionImageLayout(
-			*imageAndMemory->getImage(),
+			*imageAndMemory.getImage(),
 			vk::ImageLayout::eUndefined,
 			vk::ImageLayout::eTransferDstOptimal,
 			mipLevels
 		);
 		commandPool.copyBufferToImage(
-			*stagingBufferAndMemory->getBuffer(),
-			*imageAndMemory->getImage(),
+			*stagingBufferAndMemory.getBuffer(),
+			*imageAndMemory.getImage(),
 			(uint32_t)texWidth,
 			(uint32_t)texHeight
 		);
 		/*
 		commandPool.transitionImageLayout(
-			*imageAndMemory->getImage(),
+			*imageAndMemory.getImage(),
 			vk::ImageLayout::eTransferDstOptimal,
 			vk::ImageLayout::eShaderReadOnlyOptimal,
 			mipLevels
@@ -1083,10 +1083,10 @@ protected:
 	vk::raii::SwapchainKHR obj;
 	vk::raii::RenderPass renderPass;
 
-	std::unique_ptr<VulkanImageAndMemory> depthImageAndMemory;
+	VulkanImageAndMemory depthImageAndMemory;
 	vk::raii::ImageView depthImageView;
 	
-	std::unique_ptr<VulkanImageAndMemory> colorImageAndMemory;
+	VulkanImageAndMemory colorImageAndMemory;
 	vk::raii::ImageView colorImageView;
 public:
 	vk::Extent2D extent;
@@ -1136,9 +1136,9 @@ public:
 	VulkanSwapChain(
 		vk::raii::SwapchainKHR && obj_,
 		vk::raii::RenderPass && renderPass_,
-		std::unique_ptr<VulkanImageAndMemory> && depthImageAndMemory_,
+		VulkanImageAndMemory && depthImageAndMemory_,
 		vk::raii::ImageView && depthImageView_,
-		std::unique_ptr<VulkanImageAndMemory> && colorImageAndMemory_,
+		VulkanImageAndMemory && colorImageAndMemory_,
 		vk::raii::ImageView && colorImageView_,
 		vk::Extent2D && extent_,
 		std::vector<vk::Image> && images_,
@@ -1244,7 +1244,7 @@ public:
 		);
 		auto colorImageView = createImageView(
 			device,
-			*colorImageAndMemory->getImage(),
+			*colorImageAndMemory.getImage(),
 			colorFormat,
 			vk::ImageAspectFlagBits::eColor,
 			1
@@ -1267,7 +1267,7 @@ public:
 		);
 		auto depthImageView = createImageView(
 			device,
-			*depthImageAndMemory->getImage(),
+			*depthImageAndMemory.getImage(),
 			depthFormat,
 			vk::ImageAspectFlagBits::eDepth,
 			1
@@ -1553,17 +1553,17 @@ public:
 
 struct VulkanMesh {
 protected:
-	std::unique_ptr<VulkanBufferAndMemory> vertexBufferAndMemory;
-	std::unique_ptr<VulkanBufferAndMemory> indexBufferAndMemory;
+	VulkanBufferAndMemory vertexBufferAndMemory;
+	VulkanBufferAndMemory indexBufferAndMemory;
 	uint32_t numIndices = {};
 public:
-	auto const & getVertexes() const { return *vertexBufferAndMemory; }
-	auto const & getIndexes() const { return *indexBufferAndMemory; }
+	auto const & getVertexes() const { return vertexBufferAndMemory; }
+	auto const & getIndexes() const { return indexBufferAndMemory; }
 	uint32_t getNumIndexes() const { return numIndices; }
 
 	VulkanMesh(
-		std::unique_ptr<VulkanBufferAndMemory> && vertexBufferAndMemory_,
-		std::unique_ptr<VulkanBufferAndMemory> && indexBufferAndMemory_,
+		VulkanBufferAndMemory && vertexBufferAndMemory_,
+		VulkanBufferAndMemory && indexBufferAndMemory_,
 		uint32_t numIndices_
 	) : vertexBufferAndMemory(std::move(vertexBufferAndMemory_)),
 		indexBufferAndMemory(std::move(indexBufferAndMemory_)),
@@ -1673,7 +1673,7 @@ protected:
 	
 	//these two are initialized together:
 	uint32_t mipLevels = {};
-	std::unique_ptr<VulkanImageAndMemory> textureImageAndMemory;
+	VulkanImageAndMemory textureImageAndMemory;
 	
 	vk::raii::ImageView textureImageView;
 	vk::raii::Sampler textureSampler;
@@ -1789,7 +1789,7 @@ public:
 		textureImageAndMemory(createTextureImage()),
 		textureImageView(VulkanSwapChain::createImageView(
 			device(),
-			*textureImageAndMemory->getImage(),
+			*textureImageAndMemory.getImage(),
 			vk::Format::eR8G8B8A8Srgb,
 			vk::ImageAspectFlagBits::eColor,
 			mipLevels
@@ -1829,7 +1829,7 @@ public:
 					vk::MemoryPropertyFlagBits::eHostVisible
 					| vk::MemoryPropertyFlagBits::eHostCoherent
 				);
-				auto m = b->getMemory().mapMemory(
+				auto m = b.getMemory().mapMemory(
 					0,
 					sizeof(UniformBufferObject),
 					vk::MemoryMapFlags{}
@@ -1951,7 +1951,7 @@ protected:
 		);
 	
 		generateMipmaps(
-			textureImageAndMemory->getImage(),
+			textureImageAndMemory.getImage(),
 			vk::Format::eR8G8B8A8Srgb,
 			texSize.x,
 			texSize.y,
