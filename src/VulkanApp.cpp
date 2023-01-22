@@ -1666,11 +1666,8 @@ protected:
 	vk::raii::Sampler textureSampler;
 
 	VulkanMesh mesh;
-
-	// hmm combine these two into a class?
 	std::vector<VulkanBufferMemoryAndMapped> uniformBuffers;
-	
-	std::unique_ptr<vk::raii::DescriptorPool> descriptorPool;
+	vk::raii::DescriptorPool descriptorPool;
 	
 	// each of these, there are one per number of frames in flight
 	std::vector<vk::raii::DescriptorSet> descriptorSets;
@@ -1806,26 +1803,33 @@ public:
 			physicalDevice,
 			device(),
 			commandPool
-		))
-	{
-		for (size_t i = 0; i < maxFramesInFlight; i++) {
-			auto b = VulkanDeviceMemoryBuffer::create(
-				physicalDevice,
-				device(),
-				sizeof(UniformBufferObject),
-				vk::BufferUsageFlagBits::eUniformBuffer,
-				vk::MemoryPropertyFlagBits::eHostVisible
-				| vk::MemoryPropertyFlagBits::eHostCoherent
+		)),
+		uniformBuffers([this](){
+			// https://stackoverflow.com/questions/51307168/how-to-fill-a-c-container-using-a-lambda-function
+			std::vector<VulkanBufferMemoryAndMapped> tmp;
+			std::generate_n(
+				std::back_inserter(tmp),
+				maxFramesInFlight,
+				[this](){
+					auto b = VulkanDeviceMemoryBuffer::create(
+						physicalDevice,
+						device(),
+						sizeof(UniformBufferObject),
+						vk::BufferUsageFlagBits::eUniformBuffer,
+						vk::MemoryPropertyFlagBits::eHostVisible
+						| vk::MemoryPropertyFlagBits::eHostCoherent
+					);
+					auto m = b->getMemory().mapMemory(
+						0,
+						sizeof(UniformBufferObject),
+						vk::MemoryMapFlags{}
+					);
+					return VulkanBufferMemoryAndMapped(std::move(b), std::move(m));		
+				}
 			);
-			auto m = b->getMemory().mapMemory(
-				0,
-				sizeof(UniformBufferObject),
-				vk::MemoryMapFlags{}
-			);
-			uniformBuffers.push_back(VulkanBufferMemoryAndMapped(std::move(b), std::move(m)));
-		}
-
-		{
+			return tmp;	
+		}()),
+		descriptorPool([this](){
 			auto poolSizes = Common::make_array(
 				vk::DescriptorPoolSize()
 					.setType(vk::DescriptorType::eUniformBuffer)
@@ -1834,8 +1838,7 @@ public:
 					.setType(vk::DescriptorType::eCombinedImageSampler)
 					.setDescriptorCount(maxFramesInFlight)
 			);
-		
-			descriptorPool = std::make_unique<vk::raii::DescriptorPool>(
+			return vk::raii::DescriptorPool(
 				device(),
 				vk::DescriptorPoolCreateInfo()
 					.setMaxSets(maxFramesInFlight)
@@ -1843,12 +1846,19 @@ public:
 					.setPoolSizeCount(poolSizes.size())
 					.setPPoolSizes(poolSizes.data())
 			);
-		}
-
-		createDescriptorSets();
-		
-		initCommandBuffers();
-		
+		}()),
+		descriptorSets(createDescriptorSets()),
+		commandBuffers(
+			// TODO this matches 'VulkanSingleTimeCommand' ctor
+			device().allocateCommandBuffers(
+				vk::CommandBufferAllocateInfo()
+					.setCommandPool(*commandPool())
+					.setLevel(vk::CommandBufferLevel::ePrimary)
+					.setCommandBufferCount(maxFramesInFlight)
+			)
+			// end part that matches
+		)
+	{
 		initSyncObjects();
 	}
 
@@ -1856,12 +1866,9 @@ public:
 	~VulkanCommon() {
 		// vector of unique pointers, can't use `= {}`, gotta use `.clear()`
 		commandBuffers.clear();
-		descriptorSets.clear();
 		imageAvailableSemaphores.clear();
 		renderFinishedSemaphores.clear();
 		inFlightFences.clear();
-
-		descriptorPool = {};
 	}
 
 protected:
@@ -2077,17 +2084,6 @@ protected:
 		swapChain = createSwapChain();
 	}
 
-	void initCommandBuffers() {
-		// TODO this matches 'VulkanSingleTimeCommand' ctor
-		commandBuffers = device().allocateCommandBuffers(
-			vk::CommandBufferAllocateInfo()
-				.setCommandPool(*commandPool())
-				.setLevel(vk::CommandBufferLevel::ePrimary)
-				.setCommandBufferCount(maxFramesInFlight)
-		);
-		// end part that matches
-	}
-
 	void recordCommandBuffer(
 		vk::raii::CommandBuffer const & commandBuffer,
 		uint32_t imageIndex
@@ -2185,14 +2181,15 @@ protected:
 		}
 	}
 
-	void createDescriptorSets() {
+protected:
+	decltype(descriptorSets) createDescriptorSets() {
 		std::vector<vk::DescriptorSetLayout> layouts(
 			maxFramesInFlight,
 			*graphicsPipeline.getDescriptorSetLayout()
 		);
-		descriptorSets = device().allocateDescriptorSets(
+		auto descriptorSets = device().allocateDescriptorSets(
 			vk::DescriptorSetAllocateInfo()
-				.setDescriptorPool(**descriptorPool)
+				.setDescriptorPool(*descriptorPool)
 				.setDescriptorSetCount(maxFramesInFlight)
 				.setSetLayouts(layouts)
 		);
@@ -2225,8 +2222,11 @@ protected:
 				{}
 			);
 		}
+
+		return descriptorSets;
 	}
 
+protected:
 	decltype(std::chrono::high_resolution_clock::now()) startTime = std::chrono::high_resolution_clock::now();
 	
 	void updateUniformBuffer(uint32_t currentFrame_) {
