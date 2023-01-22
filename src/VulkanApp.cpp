@@ -1361,8 +1361,8 @@ struct VulkanGraphicsPipeline  {
 protected:
 	//owned:
 	vk::raii::Pipeline obj;
-	std::unique_ptr<vk::raii::PipelineLayout> pipelineLayout;
-	std::unique_ptr<vk::raii::DescriptorSetLayout> descriptorSetLayout;
+	vk::raii::PipelineLayout pipelineLayout;
+	vk::raii::DescriptorSetLayout descriptorSetLayout;
 public:
 	auto const & operator()() const { return obj; }
 	auto const & getPipelineLayout() const { return pipelineLayout; }
@@ -1371,8 +1371,8 @@ public:
 	//TODO protect? 
 	VulkanGraphicsPipeline(
 		vk::raii::Pipeline && obj_,
-		std::unique_ptr<vk::raii::PipelineLayout> && pipelineLayout_,
-		std::unique_ptr<vk::raii::DescriptorSetLayout> && descriptorSetLayout_
+		vk::raii::PipelineLayout && pipelineLayout_,
+		vk::raii::DescriptorSetLayout && descriptorSetLayout_
 	) : obj(std::move(obj_)),
 		pipelineLayout(std::move(pipelineLayout_)),
 		descriptorSetLayout(std::move(descriptorSetLayout_))
@@ -1400,7 +1400,7 @@ public:
 				.setStageFlags(vk::ShaderStageFlagBits::eFragment)
 			
 		);
-		auto descriptorSetLayout = std::make_unique<vk::raii::DescriptorSetLayout>(
+		auto descriptorSetLayout = vk::raii::DescriptorSetLayout(
 			device,
 			vk::DescriptorSetLayoutCreateInfo()
 				.setBindings(bindings)
@@ -1470,9 +1470,9 @@ public:
 			.setDynamicStates(dynamicStates);
 		
 		auto descriptorSetLayouts = Common::make_array(
-			**descriptorSetLayout
+			*descriptorSetLayout
 		);
-		auto pipelineLayout = std::make_unique<vk::raii::PipelineLayout>(
+		auto pipelineLayout = vk::raii::PipelineLayout(
 			device,
 			vk::PipelineLayoutCreateInfo()
 				.setSetLayouts(descriptorSetLayouts)
@@ -1501,7 +1501,7 @@ public:
 				.setPDepthStencilState(&depthStencil)
 				.setPColorBlendState(&colorBlending)
 				.setPDynamicState(&dynamicState)
-				.setLayout(**pipelineLayout)
+				.setLayout(*pipelineLayout)
 				.setRenderPass(*renderPass)
 				.setSubpass(0)
 				.setBasePipelineHandle(vk::Pipeline())
@@ -2113,7 +2113,7 @@ protected:
 
 			commandBuffer.bindDescriptorSets(
 				vk::PipelineBindPoint::eGraphics,
-				**graphicsPipeline.getPipelineLayout(),
+				*graphicsPipeline.getPipelineLayout(),
 				0,
 				*descriptorSets[currentFrame],
 				{}
@@ -2146,7 +2146,7 @@ protected:
 	void createDescriptorSets() {
 		std::vector<vk::DescriptorSetLayout> layouts(
 			maxFramesInFlight,
-			**graphicsPipeline.getDescriptorSetLayout()
+			*graphicsPipeline.getDescriptorSetLayout()
 		);
 		descriptorSets = device().allocateDescriptorSets(
 			vk::DescriptorSetAllocateInfo()
