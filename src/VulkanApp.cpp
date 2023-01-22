@@ -46,6 +46,19 @@ constexpr auto make_array(T&&... values)
 	>{std::forward<T>(values)...};
 }
 
+// https://stackoverflow.com/questions/51307168/how-to-fill-a-c-container-using-a-lambda-function
+// TODO the last one or something
+template<typename T, typename F>
+std::vector<T>
+generate_vector(
+	size_t n,
+	F f
+) {
+	std::vector<T> v;
+	std::generate_n(std::back_inserter(v), n, f);
+	return v;
+}
+
 }
 
 // TODO put this somewhere maybe
@@ -1672,6 +1685,7 @@ protected:
 	// each of these, there are one per number of frames in flight
 	std::vector<vk::raii::DescriptorSet> descriptorSets;
 	std::vector<vk::raii::CommandBuffer> commandBuffers;
+	
 	std::vector<vk::raii::Semaphore> imageAvailableSemaphores;
 	std::vector<vk::raii::Semaphore> renderFinishedSemaphores;
 	std::vector<vk::raii::Fence> inFlightFences;
@@ -1804,31 +1818,25 @@ public:
 			device(),
 			commandPool
 		)),
-		uniformBuffers([this](){
-			// https://stackoverflow.com/questions/51307168/how-to-fill-a-c-container-using-a-lambda-function
-			std::vector<VulkanBufferMemoryAndMapped> tmp;
-			std::generate_n(
-				std::back_inserter(tmp),
-				maxFramesInFlight,
-				[this](){
-					auto b = VulkanDeviceMemoryBuffer::create(
-						physicalDevice,
-						device(),
-						sizeof(UniformBufferObject),
-						vk::BufferUsageFlagBits::eUniformBuffer,
-						vk::MemoryPropertyFlagBits::eHostVisible
-						| vk::MemoryPropertyFlagBits::eHostCoherent
-					);
-					auto m = b->getMemory().mapMemory(
-						0,
-						sizeof(UniformBufferObject),
-						vk::MemoryMapFlags{}
-					);
-					return VulkanBufferMemoryAndMapped(std::move(b), std::move(m));		
-				}
-			);
-			return tmp;	
-		}()),
+		uniformBuffers(Common::generate_vector<VulkanBufferMemoryAndMapped>(
+			maxFramesInFlight,
+			[this]() -> VulkanBufferMemoryAndMapped {
+				auto b = VulkanDeviceMemoryBuffer::create(
+					physicalDevice,
+					device(),
+					sizeof(UniformBufferObject),
+					vk::BufferUsageFlagBits::eUniformBuffer,
+					vk::MemoryPropertyFlagBits::eHostVisible
+					| vk::MemoryPropertyFlagBits::eHostCoherent
+				);
+				auto m = b->getMemory().mapMemory(
+					0,
+					sizeof(UniformBufferObject),
+					vk::MemoryMapFlags{}
+				);
+				return VulkanBufferMemoryAndMapped(std::move(b), std::move(m));		
+			}
+		)),
 		descriptorPool([this](){
 			auto poolSizes = Common::make_array(
 				vk::DescriptorPoolSize()
@@ -2173,7 +2181,11 @@ protected:
 	void initSyncObjects() {
 		for (size_t i = 0; i < maxFramesInFlight; i++) {
 			imageAvailableSemaphores.push_back(device().createSemaphore({}));
+		}
+		for (size_t i = 0; i < maxFramesInFlight; i++) {
 			renderFinishedSemaphores.push_back(device().createSemaphore({}));
+		}
+		for (size_t i = 0; i < maxFramesInFlight; i++) {
 			inFlightFences.push_back(device().createFence(
 				vk::FenceCreateInfo()
 					.setFlags(vk::FenceCreateFlagBits::eSignaled)
