@@ -447,15 +447,28 @@ std::vector<char const *> validationLayers = {
 	"VK_LAYER_KHRONOS_validation"
 };
 
-namespace VulkanDevice {
-	auto create(
-		vk::raii::PhysicalDevice const & physicalDevice,
-		vk::raii::SurfaceKHR const & surface,
-		std::vector<char const *> const & deviceExtensions,
-		bool enableValidationLayers
-	) {
-		auto indices = VulkanPhysicalDevice::findQueueFamilies(physicalDevice, surface);
+// separate class for sole purpose of constructing device
+// I've lumped in 'graphicsQueue' and 'presentQueue' because their ctor depends on the 'indices' var which is used to ctor 'device' as well
+struct VulkanDevice {
+protected:	
+	//owns:
+	vk::raii::Device device;
+	vk::raii::Queue graphicsQueue;
+	vk::raii::Queue presentQueue;
+public:
+	auto const & operator()() const { return device; }
+	auto const & getGraphicsQueue() const { return graphicsQueue; }
+	auto const & getPresentQueue() const { return presentQueue; }
 
+protected:
+	static auto createDevice(
+		vk::raii::PhysicalDevice const & physicalDevice,
+		std::vector<char const *> const & deviceExtensions,
+		bool enableValidationLayers,
+		VulkanPhysicalDevice::QueueFamilyIndices const & indices
+	) {
+		// can't return the createInfo because it holds stack pointers
+		// gotta create the device and then move it into the calling function
 		auto queuePriorities = Common::make_array<float>(1);
 		auto queueCreateInfos = std::vector<vk::DeviceQueueCreateInfo>{};
 		for (uint32_t queueFamily : std::set<uint32_t>{
@@ -474,8 +487,8 @@ namespace VulkanDevice {
 		auto thisValidationLayers = std::vector<char const *>();
 		if (enableValidationLayers) {
 			thisValidationLayers = validationLayers;
-		}
-		std::unique_ptr<vk::raii::Device> device = std::make_unique<vk::raii::Device>(
+		}	
+		return vk::raii::Device(
 			physicalDevice,
 			vk::DeviceCreateInfo()
 				.setQueueCreateInfos(queueCreateInfos)
@@ -483,9 +496,23 @@ namespace VulkanDevice {
 				.setPEnabledExtensionNames(deviceExtensions)
 				.setPEnabledFeatures(&deviceFeatures)
 		);
-		std::unique_ptr<vk::raii::Queue> graphicsQueue = std::make_unique<vk::raii::Queue>(*device, indices.graphicsFamily.value(), 0);
-		std::unique_ptr<vk::raii::Queue> presentQueue = std::make_unique<vk::raii::Queue>(*device, indices.presentFamily.value(), 0);
-		return std::make_tuple(std::move(device), std::move(graphicsQueue), std::move(presentQueue));
+	}
+public:
+	VulkanDevice(
+		vk::raii::PhysicalDevice const & physicalDevice,
+		std::vector<char const *> const & deviceExtensions,
+		bool enableValidationLayers,
+		VulkanPhysicalDevice::QueueFamilyIndices const & indices
+	) : 
+		device(createDevice(
+			physicalDevice,
+			deviceExtensions,
+			enableValidationLayers,
+			indices
+		)),
+		graphicsQueue(device, indices.graphicsFamily.value(), 0),
+		presentQueue(device, indices.presentFamily.value(), 0)
+	{
 	}
 };
 
@@ -560,7 +587,7 @@ struct VulkanRenderPass  {
 					vk::AccessFlagBits::eDepthStencilAttachmentWrite
 				)
 		);
-		return std::make_unique<vk::raii::RenderPass>(
+		return vk::raii::RenderPass(
 			device,
 			vk::RenderPassCreateInfo()
 				.setAttachments(attachments)
@@ -872,13 +899,35 @@ namespace VulkanDeviceMemoryBuffer  {
 	}
 };
 
-namespace VulkanDeviceMemoryImage {
+struct VulkanImageAndMemory {
+protected:	
+	vk::raii::Image image;
+	vk::raii::DeviceMemory memory;
+public:
+	auto const & getImage() const { return image; }
+	auto const & getMemory() const { return memory; }
+	
+	VulkanImageAndMemory(
+		vk::raii::Image && image_,
+		vk::raii::DeviceMemory && memory_
+	) :	image(std::move(image_)),
+		memory(std::move(memory_))
+	{}
 
-	std::pair<
-		std::unique_ptr<vk::raii::Image>,
-		std::unique_ptr<vk::raii::DeviceMemory>
-	>
-	createImage(
+	VulkanImageAndMemory(VulkanImageAndMemory && o)
+	: 	image(std::move(o.image)),
+		memory(std::move(o.memory))
+	{}
+
+	VulkanImageAndMemory & operator=(VulkanImageAndMemory && o) {
+		image = std::move(o.image);
+		memory = std::move(o.memory);
+		return *this;
+	}
+};
+
+namespace VulkanDeviceMemoryImage {
+	auto createImage(
 		vk::raii::PhysicalDevice const & physicalDevice,
 		vk::raii::Device const & device,
 		uint32_t width,
@@ -891,7 +940,7 @@ namespace VulkanDeviceMemoryImage {
 		vk::MemoryPropertyFlags properties
 	) {
 		// TODO this as a ctor that just calls Super
-		std::unique_ptr<vk::raii::Image> image = std::make_unique<vk::raii::Image>(
+		auto image = vk::raii::Image(
 			device,
 			vk::ImageCreateInfo()
 				.setImageType(vk::ImageType::e2D)
@@ -906,8 +955,8 @@ namespace VulkanDeviceMemoryImage {
 				.setInitialLayout(vk::ImageLayout::eUndefined)
 		);
 
-		auto memRequirements = image->getMemoryRequirements();
-		std::unique_ptr<vk::raii::DeviceMemory> imageMemory = std::make_unique<vk::raii::DeviceMemory>(
+		auto memRequirements = image.getMemoryRequirements();
+		auto imageMemory = vk::raii::DeviceMemory(
 			device,
 			vk::MemoryAllocateInfo()
 				.setAllocationSize(memRequirements.size)
@@ -917,15 +966,11 @@ namespace VulkanDeviceMemoryImage {
 					properties
 				))
 		);
-		(*device).bindImageMemory(**image, **imageMemory, 0);
-		return std::make_pair(std::move(image), std::move(imageMemory));
+		(*device).bindImageMemory(*image, *imageMemory, 0);
+		return std::make_unique<VulkanImageAndMemory>(std::move(image), std::move(imageMemory));
 	}
 
-	std::pair<
-		std::unique_ptr<vk::raii::Image>,
-		std::unique_ptr<vk::raii::DeviceMemory>
-	>
-	makeTextureFromStaged(
+	std::unique_ptr<VulkanImageAndMemory> makeTextureFromStaged(
 		vk::raii::PhysicalDevice const & physicalDevice,
 		vk::raii::Device const & device,
 		VulkanCommandPool const & commandPool,
@@ -944,11 +989,8 @@ namespace VulkanDeviceMemoryImage {
 			srcData,
 			bufferSize
 		);
-		
-		std::unique_ptr<vk::raii::Image> image;
-		std::unique_ptr<vk::raii::DeviceMemory> imageMemory;
-		std::tie(image, imageMemory) 
-		= createImage(
+
+		std::unique_ptr<VulkanImageAndMemory> imageAndMemory = createImage(
 			physicalDevice,
 			device,
 			texWidth,
@@ -964,47 +1006,43 @@ namespace VulkanDeviceMemoryImage {
 		);
 
 		commandPool.transitionImageLayout(
-			**image,
+			*imageAndMemory->getImage(),
 			vk::ImageLayout::eUndefined,
 			vk::ImageLayout::eTransferDstOptimal,
 			mipLevels
 		);
 		commandPool.copyBufferToImage(
 			**stagingBuffer,
-			**image,
+			*imageAndMemory->getImage(),
 			(uint32_t)texWidth,
 			(uint32_t)texHeight
 		);
 		/*
 		commandPool.transitionImageLayout(
-			image,
+			*imageAndMemory->getImage(),
 			vk::ImageLayout::eTransferDstOptimal,
 			vk::ImageLayout::eShaderReadOnlyOptimal,
 			mipLevels
 		);
 		*/
-		
-		return std::make_pair(std::move(image), std::move(imageMemory));
+	
+		//compiler tells me to remove this ... but won't that still call the dtor?
+		//return std::move(imageAndMemory);
+		return imageAndMemory;
 	}
-
 };
 
 struct VulkanSwapChain {
 protected:
-	std::unique_ptr<vk::raii::SwapchainKHR> obj;
 	//owned
-	std::unique_ptr<vk::raii::RenderPass> renderPass;
+	vk::raii::SwapchainKHR obj;
+	vk::raii::RenderPass renderPass;
 
-	std::unique_ptr<vk::raii::Image> depthImage;
-	std::unique_ptr<vk::raii::DeviceMemory> depthImageMemory;
+	std::unique_ptr<VulkanImageAndMemory> depthImageAndMemory;
 	std::unique_ptr<vk::raii::ImageView> depthImageView;
 	
-	std::unique_ptr<vk::raii::Image> colorImage;
-	std::unique_ptr<vk::raii::DeviceMemory> colorImageMemory;
+	std::unique_ptr<VulkanImageAndMemory> colorImageAndMemory;
 	std::unique_ptr<vk::raii::ImageView> colorImageView;
-	
-	// hold for this class lifespan
-	vk::raii::Device const & device;
 public:
 	vk::Extent2D extent;
 	
@@ -1015,37 +1053,73 @@ public:
 	std::vector<vk::raii::Framebuffer> framebuffers;
 	
 public:
-	auto const & operator()() const { return *obj; }
-	auto const & getRenderPass() const { return *renderPass; }
-
-	~VulkanSwapChain() {
-		depthImageView = {};
-		depthImageMemory = {};
-		depthImage = {};
-		
-		colorImageView = {};
-		colorImageMemory = {};
-		colorImage = {};
-		
-		framebuffers.clear();
-		imageViews.clear();
-		obj = {};
-	}
+	auto const & operator()() const { return obj; }
+	auto const & getRenderPass() const { return renderPass; }
 
 	// ************** from here on down, app-specific **************
 	// but so are all the member variables so ...
 
+	VulkanSwapChain(VulkanSwapChain && o) 
+	: 	obj(std::move(o.obj)),
+		renderPass(std::move(o.renderPass)),
+		depthImageAndMemory(std::move(o.depthImageAndMemory)),
+		depthImageView(std::move(o.depthImageView)),
+		colorImageAndMemory(std::move(o.colorImageAndMemory)),
+		colorImageView(std::move(o.colorImageView)),
+		extent(std::move(o.extent)),
+		images(std::move(o.images)),
+		imageViews(std::move(o.imageViews)),
+		framebuffers(std::move(o.framebuffers))
+	{
+	}
+
+	VulkanSwapChain & operator=(VulkanSwapChain && o) {
+	 	obj = std::move(o.obj);
+		renderPass = std::move(o.renderPass);
+		depthImageAndMemory = std::move(o.depthImageAndMemory);
+		depthImageView = std::move(o.depthImageView);
+		colorImageAndMemory = std::move(o.colorImageAndMemory);
+		colorImageView = std::move(o.colorImageView);
+		extent = std::move(o.extent);
+		images = std::move(o.images);
+		imageViews = std::move(o.imageViews);
+		framebuffers = std::move(o.framebuffers);
+		return *this;
+	}
+
+	//should I make this protected friend?
 	VulkanSwapChain(
+		vk::raii::SwapchainKHR && obj_,
+		vk::raii::RenderPass && renderPass_,
+		std::unique_ptr<VulkanImageAndMemory> && depthImageAndMemory_,
+		std::unique_ptr<vk::raii::ImageView> && depthImageView_,
+		std::unique_ptr<VulkanImageAndMemory> && colorImageAndMemory_,
+		std::unique_ptr<vk::raii::ImageView> && colorImageView_,
+		vk::Extent2D && extent_,
+		std::vector<vk::Image> && images_,
+		std::vector<std::unique_ptr<vk::raii::ImageView>> && imageViews_,
+		std::vector<vk::raii::Framebuffer> && framebuffers_
+	) : obj(std::move(obj_)),
+		renderPass(std::move(renderPass_)),
+		depthImageAndMemory(std::move(depthImageAndMemory_)),
+		depthImageView(std::move(depthImageView_)),
+		colorImageAndMemory(std::move(colorImageAndMemory_)),
+		colorImageView(std::move(colorImageView_)),
+		extent(std::move(extent_)),
+		images(std::move(images_)),
+		imageViews(std::move(imageViews_)),
+		framebuffers(std::move(framebuffers_))
+	{}
+
+	static VulkanSwapChain create(
 		Tensor::int2 screenSize,
 		vk::raii::PhysicalDevice const & physicalDevice,
-		vk::raii::Device const & device_,
+		vk::raii::Device const & device,
 		vk::raii::SurfaceKHR const & surface,
 		vk::SampleCountFlagBits msaaSamples
-	) : device(device_) {
+	) {
 		auto swapChainSupport = VulkanPhysicalDevice::querySwapChainSupport(physicalDevice, surface);
-		auto surfaceFormat = chooseSwapSurfaceFormat(swapChainSupport.formats);
-		auto presentMode = chooseSwapPresentMode(swapChainSupport.presentModes);
-		extent = chooseSwapExtent(screenSize, swapChainSupport.capabilities);
+		auto extent = chooseSwapExtent(screenSize, swapChainSupport.capabilities);
 
 		// how come imageCount is one less than vkGetSwapchainImagesKHR gives?
 		// maxImageCount == 0 means no max?
@@ -1054,6 +1128,8 @@ public:
 			imageCount = std::min(imageCount, swapChainSupport.capabilities.maxImageCount);
 		}
 
+		auto surfaceFormat = chooseSwapSurfaceFormat(swapChainSupport.formats);
+		auto presentMode = chooseSwapPresentMode(swapChainSupport.presentModes);
 		auto createInfo = vk::SwapchainCreateInfoKHR()
 			.setSurface(*surface)
 			.setMinImageCount(imageCount)
@@ -1077,16 +1153,20 @@ public:
 		} else {
 			createInfo.setImageSharingMode(vk::SharingMode::eExclusive);
 		}
-		obj = std::make_unique<vk::raii::SwapchainKHR>(
+		auto obj = vk::raii::SwapchainKHR(
 			device,
 			createInfo
 		);
 
-		for (auto const & vkimage : obj->getImages()) {
+		std::vector<vk::Image> images;
+		for (auto const & vkimage : obj.getImages()) {
 			images.push_back(vk::Image(vkimage));
 		}
+		
+		std::vector<std::unique_ptr<vk::raii::ImageView>> imageViews;
 		for (size_t i = 0; i < images.size(); i++) {
 			imageViews.push_back(createImageView(
+				device,
 				images[i],
 				surfaceFormat.format,
 				vk::ImageAspectFlagBits::eColor,
@@ -1094,7 +1174,7 @@ public:
 			));
 		}
 	
-		renderPass = VulkanRenderPass::create(
+		auto renderPass = VulkanRenderPass::create(
 			physicalDevice,
 			device,
 			surfaceFormat.format,
@@ -1104,8 +1184,7 @@ public:
 		//createColorResources
 		auto colorFormat = surfaceFormat.format;
 		
-		std::tie(colorImage, colorImageMemory) 
-		= VulkanDeviceMemoryImage::createImage(
+		auto colorImageAndMemory = VulkanDeviceMemoryImage::createImage(
 			physicalDevice,
 			device,
 			extent.width,
@@ -1117,8 +1196,9 @@ public:
 			vk::ImageUsageFlagBits::eTransientAttachment | vk::ImageUsageFlagBits::eColorAttachment,
 			vk::MemoryPropertyFlagBits::eDeviceLocal
 		);
-		colorImageView = createImageView(
-			**colorImage,
+		auto colorImageView = createImageView(
+			device,
+			*colorImageAndMemory->getImage(),
 			colorFormat,
 			vk::ImageAspectFlagBits::eColor,
 			1
@@ -1126,8 +1206,8 @@ public:
 		
 		//createDepthResources
 		auto depthFormat = VulkanPhysicalDevice::findDepthFormat(physicalDevice);
-		std::tie(depthImage, depthImageMemory) 
-		= VulkanDeviceMemoryImage::createImage(
+		
+		auto depthImageAndMemory = VulkanDeviceMemoryImage::createImage(
 			physicalDevice,
 			device,
 			extent.width,
@@ -1139,14 +1219,16 @@ public:
 			vk::ImageUsageFlagBits::eDepthStencilAttachment,
 			vk::MemoryPropertyFlagBits::eDeviceLocal
 		);
-		depthImageView = createImageView(
-			**depthImage,
+		auto depthImageView = createImageView(
+			device,
+			*depthImageAndMemory->getImage(),
 			depthFormat,
 			vk::ImageAspectFlagBits::eDepth,
 			1
 		);
 		
 		//createFramebuffers
+		std::vector<vk::raii::Framebuffer> framebuffers;
 		for (size_t i = 0; i < imageViews.size(); i++) {
 			auto attachments = Common::make_array(
 				**colorImageView,
@@ -1157,7 +1239,7 @@ public:
 				vk::raii::Framebuffer(
 					device,
 					vk::FramebufferCreateInfo()
-						.setRenderPass(**renderPass)
+						.setRenderPass(*renderPass)
 						.setAttachments(attachments)
 						.setWidth(extent.width)
 						.setHeight(extent.height)
@@ -1165,10 +1247,26 @@ public:
 				)
 			);
 		}
+	
+		return VulkanSwapChain(
+			std::move(obj),
+			std::move(renderPass),
+			std::move(depthImageAndMemory),
+			std::move(depthImageView),
+			std::move(colorImageAndMemory),
+			std::move(colorImageView),
+			std::move(extent),
+			std::move(images),
+			std::move(imageViews),
+			std::move(framebuffers)
+		);
 	}
 
 public:
-	std::unique_ptr<vk::raii::ImageView> createImageView(
+	static
+	std::unique_ptr<vk::raii::ImageView>
+	createImageView(
+		vk::raii::Device const & device,
 		vk::Image image,
 		vk::Format format,
 		vk::ImageAspectFlags aspectFlags,
@@ -1422,13 +1520,9 @@ protected:
 	std::unique_ptr<vk::raii::DebugUtilsMessengerEXT> debug;	// optional
 	vk::raii::SurfaceKHR surface;
 	vk::raii::PhysicalDevice physicalDevice;
-	
 	vk::SampleCountFlagBits msaaSamples = vk::SampleCountFlagBits::e1;
-
-	std::unique_ptr<vk::raii::Device> device;
-	std::unique_ptr<vk::raii::Queue> graphicsQueue;
-	std::unique_ptr<vk::raii::Queue> presentQueue;
-	std::unique_ptr<VulkanSwapChain> swapChain;
+	VulkanDevice device;
+	VulkanSwapChain swapChain;
 	std::unique_ptr<VulkanGraphicsPipeline> graphicsPipeline;
 	std::unique_ptr<VulkanCommandPool> commandPool;
 	
@@ -1439,8 +1533,7 @@ protected:
 	
 	uint32_t mipLevels = {};
 
-	std::unique_ptr<vk::raii::Image> textureImage;
-	std::unique_ptr<vk::raii::DeviceMemory> textureImageMemory;
+	std::unique_ptr<VulkanImageAndMemory> textureImageAndMemory;
 	std::unique_ptr<vk::raii::ImageView> textureImageView;
 	std::unique_ptr<vk::raii::Sampler> textureSampler;
 	
@@ -1468,7 +1561,19 @@ protected:
 	bool framebufferResized = {};
 public:
 	void setFramebufferResized() { framebufferResized = true; }
+
 protected:	
+	// has to be called only after all fields above 'swapChain' have been initialized
+	VulkanSwapChain createSwapChain() {
+		return VulkanSwapChain::create(
+			app->getScreenSize(),
+			physicalDevice,
+			device(),
+			surface,
+			msaaSamples
+		);
+	}
+
 public:
 	VulkanCommon(
 		::SDLApp::SDLApp const * const app_
@@ -1519,26 +1624,20 @@ public:
 			instance,
 			surface,
 			deviceExtensions
-		))
-	{
-		msaaSamples = VulkanPhysicalDevice::getMaxUsableSampleCount(physicalDevice);
-		std::tie(device, graphicsQueue, presentQueue) = VulkanDevice::create(
+		)),
+		msaaSamples(VulkanPhysicalDevice::getMaxUsableSampleCount(physicalDevice)),
+		device(
 			physicalDevice,
-			surface,
 			deviceExtensions,
-			enableValidationLayers
-		);
-		swapChain = std::make_unique<VulkanSwapChain>(
-			app->getScreenSize(),
-			physicalDevice,
-			*device,
-			surface,
-			msaaSamples
-		);
+			enableValidationLayers,
+			VulkanPhysicalDevice::findQueueFamilies(physicalDevice, surface)
+		),
+		swapChain(createSwapChain())
+	{
 		graphicsPipeline = std::make_unique<VulkanGraphicsPipeline>(
 			physicalDevice,
-			*device,
-			swapChain->getRenderPass(),
+			device(),
+			swapChain.getRenderPass(),
 			msaaSamples
 		);
 		
@@ -1548,8 +1647,8 @@ public:
 				surface
 			);
 			commandPool = std::make_unique<VulkanCommandPool>(
-				*device,
-				*graphicsQueue,
+				device(),
+				device.getGraphicsQueue(),
 				vk::CommandPoolCreateInfo()
 					.setFlags(vk::CommandPoolCreateFlagBits::eResetCommandBuffer)
 					.setQueueFamilyIndex(queueFamilyIndices.graphicsFamily.value())
@@ -1558,15 +1657,16 @@ public:
 		
 		createTextureImage();
 	   
-		textureImageView = swapChain->createImageView(
-			**textureImage,
+		textureImageView = VulkanSwapChain::createImageView(
+			device(),
+			*textureImageAndMemory->getImage(),
 			vk::Format::eR8G8B8A8Srgb,
 			vk::ImageAspectFlagBits::eColor,
 			mipLevels
 		);
 
 		textureSampler = std::make_unique<vk::raii::Sampler>(
-			*device,
+			device(),
 			vk::SamplerCreateInfo()
 				.setMagFilter(vk::Filter::eLinear)
 				.setMinFilter(vk::Filter::eLinear)
@@ -1589,7 +1689,7 @@ public:
 		std::tie(vertexBuffer, vertexBufferMemory) 
 		= VulkanDeviceMemoryBuffer::makeBufferFromStaged(
 			physicalDevice,
-			*device,
+			device(),
 			*commandPool,
 			vertices.data(),
 			sizeof(vertices[0]) * vertices.size()
@@ -1598,7 +1698,7 @@ public:
 		std::tie(indexBuffer, indexBufferMemory)
 		= VulkanDeviceMemoryBuffer::makeBufferFromStaged(
 			physicalDevice,
-			*device,
+			device(),
 			*commandPool,
 			indices.data(),
 			sizeof(indices[0]) * indices.size()
@@ -1608,7 +1708,7 @@ public:
 			uniformBuffers.push_back(
 				VulkanDeviceMemoryBuffer::create(
 					physicalDevice,
-					*device,
+					device(),
 					sizeof(UniformBufferObject),
 					vk::BufferUsageFlagBits::eUniformBuffer,
 					vk::MemoryPropertyFlagBits::eHostVisible
@@ -1633,7 +1733,7 @@ public:
 			);
 		
 			descriptorPool = std::make_unique<vk::raii::DescriptorPool>(
-				*device,
+				device(),
 				vk::DescriptorPoolCreateInfo()
 					.setMaxSets(maxFramesInFlight)
 					//why aren't these two merged into one function?
@@ -1669,14 +1769,10 @@ public:
 
 		textureSampler = {};
 		textureImageView = {};
-		textureImageMemory = {};
-		textureImage = {};
+		textureImageAndMemory = {};
 		
 		graphicsPipeline = {};
-		swapChain = {};
 		commandPool = {};
-		
-		device = {};
 	}
 
 protected:
@@ -1731,10 +1827,9 @@ protected:
 		vk::DeviceSize const bufferSize = texSize.x * texSize.y * texBPP;
 		mipLevels = (uint32_t)std::floor(std::log2(std::max(texSize.x, texSize.y))) + 1;
 	
-		std::tie(textureImage, textureImageMemory) 
-		= VulkanDeviceMemoryImage::makeTextureFromStaged(
+		textureImageAndMemory = VulkanDeviceMemoryImage::makeTextureFromStaged(
 			physicalDevice,
-			*device,
+			device(),
 			*commandPool,
 			srcData,
 			bufferSize,
@@ -1744,7 +1839,7 @@ protected:
 		);
 	
 		generateMipmaps(
-			*textureImage,
+			textureImageAndMemory->getImage(),
 			vk::Format::eR8G8B8A8Srgb,
 			texSize.x,
 			texSize.y,
@@ -1767,8 +1862,8 @@ protected:
 		}
 
 		VulkanSingleTimeCommand commandBuffer(
-			*device,
-			*graphicsQueue,
+			device(),
+			device.getGraphicsQueue(),
 			(*commandPool)()
 		);
 
@@ -1923,19 +2018,13 @@ protected:
 			throw Common::Exception() << "here";
 		}
 #endif
-		device->waitIdle();
-		swapChain = std::make_unique<VulkanSwapChain>(
-			app->getScreenSize(),
-			physicalDevice,
-			*device,
-			surface,
-			msaaSamples
-		);
+		device().waitIdle();
+		swapChain = createSwapChain();
 	}
 
 	void initCommandBuffers() {
 		// TODO this matches 'VulkanSingleTimeCommand' ctor
-		commandBuffers = device->allocateCommandBuffers(
+		commandBuffers = device().allocateCommandBuffers(
 			vk::CommandBufferAllocateInfo()
 				.setCommandPool(*(*commandPool)())
 				.setLevel(vk::CommandBufferLevel::ePrimary)
@@ -1960,11 +2049,11 @@ protected:
 		);
 		commandBuffer.beginRenderPass(
 			vk::RenderPassBeginInfo()
-				.setRenderPass(*swapChain->getRenderPass())
-				.setFramebuffer(*swapChain->framebuffers[imageIndex])
+				.setRenderPass(*swapChain.getRenderPass())
+				.setFramebuffer(*swapChain.framebuffers[imageIndex])
 				.setRenderArea(
 					vk::Rect2D()
-						.setExtent(swapChain->extent)
+						.setExtent(swapChain.extent)
 				)
 				.setClearValues(clearValues),
 			vk::SubpassContents::eInline
@@ -1980,8 +2069,8 @@ protected:
 				0,
 				Common::make_array(
 					vk::Viewport()
-						.setWidth(swapChain->extent.width)
-						.setHeight(swapChain->extent.height)
+						.setWidth(swapChain.extent.width)
+						.setHeight(swapChain.extent.height)
 						.setMinDepth(0)
 						.setMaxDepth(1)
 				)
@@ -1991,7 +2080,7 @@ protected:
 				0,
 				Common::make_array(
 					vk::Rect2D()
-						.setExtent(swapChain->extent)
+						.setExtent(swapChain.extent)
 				)
 			);
 
@@ -2032,9 +2121,9 @@ protected:
 
 	void initSyncObjects() {
 		for (size_t i = 0; i < maxFramesInFlight; i++) {
-			imageAvailableSemaphores.push_back(device->createSemaphore({}));
-			renderFinishedSemaphores.push_back(device->createSemaphore({}));
-			inFlightFences.push_back(device->createFence(
+			imageAvailableSemaphores.push_back(device().createSemaphore({}));
+			renderFinishedSemaphores.push_back(device().createSemaphore({}));
+			inFlightFences.push_back(device().createFence(
 				vk::FenceCreateInfo()
 					.setFlags(vk::FenceCreateFlagBits::eSignaled)
 			));
@@ -2043,7 +2132,7 @@ protected:
 
 	void createDescriptorSets() {
 		std::vector<vk::DescriptorSetLayout> layouts(maxFramesInFlight, **graphicsPipeline->getDescriptorSetLayout());
-		descriptorSets = device->allocateDescriptorSets(
+		descriptorSets = device().allocateDescriptorSets(
 			vk::DescriptorSetAllocateInfo()
 				.setDescriptorPool(**descriptorPool)
 				.setDescriptorSetCount(maxFramesInFlight)
@@ -2073,7 +2162,7 @@ protected:
 					.setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
 					.setImageInfo(imageInfo)
 			);
-			device->updateDescriptorSets(
+			device().updateDescriptorSets(
 				descriptorWrites,
 				{}
 			);
@@ -2101,7 +2190,7 @@ protected:
 		);
 		ubo.proj = Tensor::perspective<float>(
 			degToRad<float>(45),
-			(float)swapChain->extent.width / (float)swapChain->extent.height,
+			(float)swapChain.extent.width / (float)swapChain.extent.height,
 			0.1f,
 			10
 		);
@@ -2161,7 +2250,7 @@ public:
 			auto fences = Common::make_array(
 				*inFlightFences[currentFrame]
 			);
-			auto result = device->waitForFences(
+			auto result = device().waitForFences(
 				fences,
 				VK_TRUE,
 				UINT64_MAX
@@ -2175,9 +2264,9 @@ public:
 		uint32_t imageIndex = {};
 		{
 			vk::Result result;
-			std::tie(result, imageIndex) = device->acquireNextImage2KHR(
+			std::tie(result, imageIndex) = device().acquireNextImage2KHR(
 				vk::AcquireNextImageInfoKHR()
-					.setSwapchain(*(*swapChain)())
+					.setSwapchain(*swapChain())
 					.setTimeout(UINT64_MAX)
 					.setSemaphore(*imageAvailableSemaphores[currentFrame])
 			);
@@ -2194,7 +2283,7 @@ public:
 
 		updateUniformBuffer(currentFrame);
 
-		device->resetFences(
+		device().resetFences(
 			Common::make_array(
 				*inFlightFences[currentFrame]
 			)
@@ -2222,7 +2311,7 @@ public:
 		auto cmdBufs = Common::make_array(
 			*commandBuffers[currentFrame]
 		);
-		graphicsQueue->submit(
+		device.getGraphicsQueue().submit(
 			vk::SubmitInfo()
 			.setWaitSemaphores(waitSemaphores)
 			.setWaitDstStageMask(waitStages)
@@ -2232,9 +2321,9 @@ public:
 		);
 		
 		auto swapChains = Common::make_array(
-			*(*swapChain)()
+			*swapChain()
 		);
-		auto result = presentQueue->presentKHR(
+		auto result = device.getPresentQueue().presentKHR(
 			vk::PresentInfoKHR()
 			.setWaitSemaphores(signalSemaphores)
 			.setSwapchains(swapChains)
@@ -2254,7 +2343,7 @@ public:
 	}
 public:
 	void loopDone() {
-		device->waitIdle();
+		device().waitIdle();
 	}
 };
 
