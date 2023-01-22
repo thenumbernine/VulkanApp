@@ -1084,17 +1084,17 @@ protected:
 	vk::raii::RenderPass renderPass;
 
 	std::unique_ptr<VulkanImageAndMemory> depthImageAndMemory;
-	std::unique_ptr<vk::raii::ImageView> depthImageView;
+	vk::raii::ImageView depthImageView;
 	
 	std::unique_ptr<VulkanImageAndMemory> colorImageAndMemory;
-	std::unique_ptr<vk::raii::ImageView> colorImageView;
+	vk::raii::ImageView colorImageView;
 public:
 	vk::Extent2D extent;
 	
 	// I would combine these into one struct so they can be dtored together
 	// but it seems vulkan wants vk::Images linear for its getter?
 	std::vector<vk::Image> images;
-	std::vector<std::unique_ptr<vk::raii::ImageView>> imageViews;
+	std::vector<vk::raii::ImageView> imageViews;
 	std::vector<vk::raii::Framebuffer> framebuffers;
 	
 public:
@@ -1137,12 +1137,12 @@ public:
 		vk::raii::SwapchainKHR && obj_,
 		vk::raii::RenderPass && renderPass_,
 		std::unique_ptr<VulkanImageAndMemory> && depthImageAndMemory_,
-		std::unique_ptr<vk::raii::ImageView> && depthImageView_,
+		vk::raii::ImageView && depthImageView_,
 		std::unique_ptr<VulkanImageAndMemory> && colorImageAndMemory_,
-		std::unique_ptr<vk::raii::ImageView> && colorImageView_,
+		vk::raii::ImageView && colorImageView_,
 		vk::Extent2D && extent_,
 		std::vector<vk::Image> && images_,
-		std::vector<std::unique_ptr<vk::raii::ImageView>> && imageViews_,
+		std::vector<vk::raii::ImageView> && imageViews_,
 		std::vector<vk::raii::Framebuffer> && framebuffers_
 	) : obj(std::move(obj_)),
 		renderPass(std::move(renderPass_)),
@@ -1209,7 +1209,7 @@ public:
 			images.push_back(vk::Image(vkimage));
 		}
 		
-		std::vector<std::unique_ptr<vk::raii::ImageView>> imageViews;
+		std::vector<vk::raii::ImageView> imageViews;
 		for (size_t i = 0; i < images.size(); i++) {
 			imageViews.push_back(createImageView(
 				device,
@@ -1277,9 +1277,9 @@ public:
 		std::vector<vk::raii::Framebuffer> framebuffers;
 		for (size_t i = 0; i < imageViews.size(); i++) {
 			auto attachments = Common::make_array(
-				**colorImageView,
-				**depthImageView,
-				**imageViews[i]
+				*colorImageView,
+				*depthImageView,
+				*imageViews[i]
 			);
 			framebuffers.push_back(
 				vk::raii::Framebuffer(
@@ -1310,7 +1310,7 @@ public:
 
 public:
 	static
-	std::unique_ptr<vk::raii::ImageView>
+	vk::raii::ImageView
 	createImageView(
 		vk::raii::Device const & device,
 		vk::Image image,
@@ -1318,7 +1318,7 @@ public:
 		vk::ImageAspectFlags aspectFlags,
 		uint32_t mipLevels
 	) {
-		return std::make_unique<vk::raii::ImageView>(
+		return vk::raii::ImageView(
 			device,
 			vk::ImageViewCreateInfo()
 				.setImage(image)
@@ -1675,7 +1675,7 @@ protected:
 	uint32_t mipLevels = {};
 	std::unique_ptr<VulkanImageAndMemory> textureImageAndMemory;
 	
-	std::unique_ptr<vk::raii::ImageView> textureImageView;
+	vk::raii::ImageView textureImageView;
 	vk::raii::Sampler textureSampler;
 
 	VulkanMesh mesh;
@@ -2203,7 +2203,7 @@ protected:
 				.setRange(sizeof(UniformBufferObject));
 			auto imageInfo = vk::DescriptorImageInfo()
 				.setSampler(*textureSampler)
-				.setImageView(**textureImageView)
+				.setImageView(*textureImageView)
 				.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
 			auto descriptorWrites = Common::make_array(
 				vk::WriteDescriptorSet()
