@@ -791,8 +791,10 @@ public:
 	}
 };
 
+struct VulkanBufferMemoryAndMapped;
 //copying the whole thing from VulkanImageAndMemory because I need the return type of operator= to be child-most, not parent-most
 struct VulkanBufferAndMemory {
+	friend struct VulkanBufferMemoryAndMapped;
 protected:	
 	vk::raii::Buffer buffer;
 	vk::raii::DeviceMemory memory;
@@ -819,6 +821,33 @@ public:
 	}
 };
 
+struct VulkanBufferMemoryAndMapped {
+protected:	
+	std::unique_ptr<VulkanBufferAndMemory> bm;
+	void * mapped = {};
+public:
+	auto const & getBuffer() const { return bm->getBuffer(); }
+	auto const & getMemory() const { return bm->getMemory(); }
+	void * getMapped() { return mapped; }
+	
+	VulkanBufferMemoryAndMapped(
+		std::unique_ptr<VulkanBufferAndMemory> && bm_,
+		void * && mapped_
+	) :	bm(std::move(bm_)),
+		mapped(std::move(mapped_))
+	{}
+
+	VulkanBufferMemoryAndMapped(VulkanBufferMemoryAndMapped && o)
+	: 	bm(std::move(o.bm)),
+		mapped(std::move(o.mapped))
+	{}
+
+	VulkanBufferMemoryAndMapped & operator=(VulkanBufferMemoryAndMapped && o) {
+		bm = std::move(o.bm);
+		mapped = std::move(o.mapped);
+		return *this;
+	}
+};
 
 namespace VulkanDeviceMakeFromStagingBuffer {
 	auto create(
@@ -1639,8 +1668,7 @@ protected:
 	VulkanMesh mesh;
 
 	// hmm combine these two into a class?
-	std::vector<std::unique_ptr<VulkanBufferAndMemory>> uniformBuffers;
-	std::vector<void*> uniformBuffersMapped;
+	std::vector<VulkanBufferMemoryAndMapped> uniformBuffers;
 	
 	std::unique_ptr<vk::raii::DescriptorPool> descriptorPool;
 	
@@ -1781,21 +1809,20 @@ public:
 		))
 	{
 		for (size_t i = 0; i < maxFramesInFlight; i++) {
-			uniformBuffers.push_back(
-				VulkanDeviceMemoryBuffer::create(
-					physicalDevice,
-					device(),
-					sizeof(UniformBufferObject),
-					vk::BufferUsageFlagBits::eUniformBuffer,
-					vk::MemoryPropertyFlagBits::eHostVisible
-					| vk::MemoryPropertyFlagBits::eHostCoherent
-				)
+			auto b = VulkanDeviceMemoryBuffer::create(
+				physicalDevice,
+				device(),
+				sizeof(UniformBufferObject),
+				vk::BufferUsageFlagBits::eUniformBuffer,
+				vk::MemoryPropertyFlagBits::eHostVisible
+				| vk::MemoryPropertyFlagBits::eHostCoherent
 			);
-			uniformBuffersMapped.push_back(uniformBuffers[i]->getMemory().mapMemory(
+			auto m = b->getMemory().mapMemory(
 				0,
 				sizeof(UniformBufferObject),
 				vk::MemoryMapFlags{}
-			));
+			);
+			uniformBuffers.push_back(VulkanBufferMemoryAndMapped(std::move(b), std::move(m)));
 		}
 
 		{
@@ -2172,7 +2199,7 @@ protected:
 
 		for (size_t i = 0; i < maxFramesInFlight; i++) {
 			auto bufferInfo = vk::DescriptorBufferInfo()
-				.setBuffer(*uniformBuffers[i]->getBuffer())
+				.setBuffer(*uniformBuffers[i].getBuffer())
 				.setRange(sizeof(UniformBufferObject));
 			auto imageInfo = vk::DescriptorImageInfo()
 				.setSampler(*textureSampler)
@@ -2273,7 +2300,7 @@ float[3][4][4] buf = {
 	{-0, -0, 3.4641, 1}
 }
 */
-		memcpy(uniformBuffersMapped[currentFrame_], &ubo, sizeof(ubo));
+		memcpy(uniformBuffers[currentFrame_].getMapped(), &ubo, sizeof(ubo));
 	}
 public:
 	void drawFrame() {
