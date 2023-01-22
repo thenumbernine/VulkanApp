@@ -1120,6 +1120,7 @@ public:
 		framebuffers(std::move(framebuffers_))
 	{}
 
+	//goes in a separate method because it puts a few objects on the stack while it builds vk objs
 	static VulkanSwapChain create(
 		Tensor::int2 screenSize,
 		vk::raii::PhysicalDevice const & physicalDevice,
@@ -1359,24 +1360,31 @@ namespace VulkanShaderModule {
 struct VulkanGraphicsPipeline  {
 protected:
 	//owned:
-	std::unique_ptr<vk::raii::Pipeline> obj;
+	vk::raii::Pipeline obj;
 	std::unique_ptr<vk::raii::PipelineLayout> pipelineLayout;
 	std::unique_ptr<vk::raii::DescriptorSetLayout> descriptorSetLayout;
-	
-	//held:
-	vk::raii::Device const & device;				//held for dtor
 public:
 	auto const & operator()() const { return obj; }
 	auto const & getPipelineLayout() const { return pipelineLayout; }
 	auto const & getDescriptorSetLayout() const { return descriptorSetLayout; }
-
+	
+	//TODO protect? 
 	VulkanGraphicsPipeline(
+		vk::raii::Pipeline && obj_,
+		std::unique_ptr<vk::raii::PipelineLayout> && pipelineLayout_,
+		std::unique_ptr<vk::raii::DescriptorSetLayout> && descriptorSetLayout_
+	) : obj(std::move(obj_)),
+		pipelineLayout(std::move(pipelineLayout_)),
+		descriptorSetLayout(std::move(descriptorSetLayout_))
+	{}
+
+	//goes in a separate method because it puts a few objects on the stack while it builds vk objs
+	static VulkanGraphicsPipeline create(
 		vk::raii::PhysicalDevice const & physicalDevice,
-		vk::raii::Device const & device_,
+		vk::raii::Device const & device,
 		vk::raii::RenderPass const & renderPass,
 		vk::SampleCountFlagBits msaaSamples
-	) : device(device_) {
-		
+	) {
 		// descriptorSetLayout is only used by graphicsPipeline
 		auto bindings = Common::make_array(
 			vk::DescriptorSetLayoutBinding()	//uboLayoutBinding
@@ -1392,7 +1400,7 @@ public:
 				.setStageFlags(vk::ShaderStageFlagBits::eFragment)
 			
 		);
-		descriptorSetLayout = std::make_unique<vk::raii::DescriptorSetLayout>(
+		auto descriptorSetLayout = std::make_unique<vk::raii::DescriptorSetLayout>(
 			device,
 			vk::DescriptorSetLayoutCreateInfo()
 				.setBindings(bindings)
@@ -1464,7 +1472,7 @@ public:
 		auto descriptorSetLayouts = Common::make_array(
 			**descriptorSetLayout
 		);
-		pipelineLayout = std::make_unique<vk::raii::PipelineLayout>(
+		auto pipelineLayout = std::make_unique<vk::raii::PipelineLayout>(
 			device,
 			vk::PipelineLayoutCreateInfo()
 				.setSetLayouts(descriptorSetLayouts)
@@ -1480,7 +1488,7 @@ public:
 				.setModule(*fragShaderModule)
 				.setPName("main")	//"frag"
 		);
-		obj = std::make_unique<vk::raii::Pipeline>(
+		auto obj = vk::raii::Pipeline(
 			device,
 			nullptr,
 			vk::GraphicsPipelineCreateInfo()
@@ -1497,6 +1505,12 @@ public:
 				.setRenderPass(*renderPass)
 				.setSubpass(0)
 				.setBasePipelineHandle(vk::Pipeline())
+		);
+
+		return VulkanGraphicsPipeline(
+			std::move(obj),
+			std::move(pipelineLayout),
+			std::move(descriptorSetLayout)
 		);
 	}
 };
@@ -1532,7 +1546,7 @@ protected:
 	vk::SampleCountFlagBits msaaSamples = vk::SampleCountFlagBits::e1;
 	VulkanDevice device;
 	VulkanSwapChain swapChain;
-	std::unique_ptr<VulkanGraphicsPipeline> graphicsPipeline;
+	VulkanGraphicsPipeline graphicsPipeline;
 	std::unique_ptr<VulkanCommandPool> commandPool;
 	
 	std::unique_ptr<VulkanBufferAndMemory> vertexBufferAndMemory;
@@ -1636,14 +1650,14 @@ public:
 			enableValidationLayers,
 			VulkanPhysicalDevice::findQueueFamilies(physicalDevice, surface)
 		),
-		swapChain(createSwapChain())
-	{
-		graphicsPipeline = std::make_unique<VulkanGraphicsPipeline>(
+		swapChain(createSwapChain()),
+		graphicsPipeline(VulkanGraphicsPipeline::create(
 			physicalDevice,
 			device(),
 			swapChain.getRenderPass(),
 			msaaSamples
-		);
+		))
+	{
 		
 		{
 			auto queueFamilyIndices = VulkanPhysicalDevice::findQueueFamilies(
@@ -1771,7 +1785,6 @@ public:
 		textureImageView = {};
 		textureImageAndMemory = {};
 		
-		graphicsPipeline = {};
 		commandPool = {};
 	}
 
@@ -2062,7 +2075,7 @@ protected:
 		{
 			commandBuffer.bindPipeline(
 				vk::PipelineBindPoint::eGraphics,
-				**(*graphicsPipeline)()
+				*graphicsPipeline()
 			);
 
 			commandBuffer.setViewport(
@@ -2100,7 +2113,7 @@ protected:
 
 			commandBuffer.bindDescriptorSets(
 				vk::PipelineBindPoint::eGraphics,
-				**graphicsPipeline->getPipelineLayout(),
+				**graphicsPipeline.getPipelineLayout(),
 				0,
 				*descriptorSets[currentFrame],
 				{}
@@ -2131,7 +2144,10 @@ protected:
 	}
 
 	void createDescriptorSets() {
-		std::vector<vk::DescriptorSetLayout> layouts(maxFramesInFlight, **graphicsPipeline->getDescriptorSetLayout());
+		std::vector<vk::DescriptorSetLayout> layouts(
+			maxFramesInFlight,
+			**graphicsPipeline.getDescriptorSetLayout()
+		);
 		descriptorSets = device().allocateDescriptorSets(
 			vk::DescriptorSetAllocateInfo()
 				.setDescriptorPool(**descriptorPool)
