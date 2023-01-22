@@ -770,135 +770,6 @@ public:
 	}
 };
 
-namespace VulkanDeviceMakeFromStagingBuffer {
-	std::pair<
-		std::unique_ptr<vk::raii::Buffer>,
-		std::unique_ptr<vk::raii::DeviceMemory>
-	>
-	create(
-		vk::raii::PhysicalDevice const & physicalDevice,
-		vk::raii::Device const & device,
-		void const * const srcData,
-		size_t bufferSize
-	) {
-		auto buffer = std::make_unique<vk::raii::Buffer>(
-			device,
-			vk::BufferCreateInfo()
-				.setSize(bufferSize)
-				.setUsage(vk::BufferUsageFlagBits::eTransferSrc)
-				.setSharingMode(vk::SharingMode::eExclusive)
-		);
-		auto memRequirements = (*device).getBufferMemoryRequirements(**buffer);
-		auto memory = std::make_unique<vk::raii::DeviceMemory>(
-			device,
-			vk::MemoryAllocateInfo()
-				.setAllocationSize(memRequirements.size)
-				.setMemoryTypeIndex(VulkanPhysicalDevice::findMemoryType(
-					physicalDevice,
-					memRequirements.memoryTypeBits,
-					vk::MemoryPropertyFlagBits::eHostVisible
-					| vk::MemoryPropertyFlagBits::eHostCoherent
-				))
-		);
-		(*device).bindBufferMemory(
-			**buffer,
-			**memory,
-			0
-		);
-
-		void * dstData = memory->mapMemory(
-			0,
-			bufferSize,
-			vk::MemoryMapFlags{}
-		);
-		memcpy(dstData, srcData, (size_t)bufferSize);
-		memory->unmapMemory();
-		
-		return std::make_pair(std::move(buffer), std::move(memory));
-	}
-};
-
-namespace VulkanDeviceMemoryBuffer  {
-	std::pair<
-		std::unique_ptr<vk::raii::Buffer>,
-		std::unique_ptr<vk::raii::DeviceMemory>
-	>
-	create(
-		vk::raii::PhysicalDevice const & physicalDevice,
-		vk::raii::Device const & device,
-		vk::DeviceSize size,
-		vk::BufferUsageFlags usage,
-		vk::MemoryPropertyFlags properties
-	) {
-		auto buffer = std::make_unique<vk::raii::Buffer>(
-			device,
-			vk::BufferCreateInfo()
-				.setFlags(vk::BufferCreateFlags())
-				.setSize(size)
-				.setUsage(usage)
-				.setSharingMode(vk::SharingMode::eExclusive)
-		);
-		auto memRequirements = (*device).getBufferMemoryRequirements(**buffer);
-		auto memory = std::make_unique<vk::raii::DeviceMemory>(
-			device,
-			vk::MemoryAllocateInfo()
-				.setAllocationSize(memRequirements.size)
-				.setMemoryTypeIndex(VulkanPhysicalDevice::findMemoryType(
-					physicalDevice,
-					memRequirements.memoryTypeBits,
-					properties
-				))
-		);
-		(*device).bindBufferMemory(
-			**buffer,
-			**memory,
-			0
-		);
-		return std::make_pair(std::move(buffer), std::move(memory));
-	}
-
-	std::pair<
-		std::unique_ptr<vk::raii::Buffer>,
-		std::unique_ptr<vk::raii::DeviceMemory>
-	>
-	makeBufferFromStaged(
-		vk::raii::PhysicalDevice const & physicalDevice,
-		vk::raii::Device const & device,
-		VulkanCommandPool const & commandPool,
-		void const * const srcData,
-		size_t bufferSize
-	) {
-		std::unique_ptr<vk::raii::Buffer> stagingBuffer;
-		std::unique_ptr<vk::raii::DeviceMemory> stagingBufferMemory;
-		std::tie(stagingBuffer, stagingBufferMemory) 
-		= VulkanDeviceMakeFromStagingBuffer::create(
-			physicalDevice,
-			device,
-			srcData,
-			bufferSize
-		);
-
-		std::unique_ptr<vk::raii::Buffer> buffer;
-		std::unique_ptr<vk::raii::DeviceMemory> memory;
-		std::tie(buffer, memory) = VulkanDeviceMemoryBuffer::create(
-			physicalDevice,
-			device,
-			bufferSize,
-			vk::BufferUsageFlagBits::eTransferDst
-			| vk::BufferUsageFlagBits::eVertexBuffer,
-			vk::MemoryPropertyFlagBits::eDeviceLocal
-		);
-		
-		commandPool.copyBuffer(
-			**stagingBuffer,
-			**buffer,
-			bufferSize
-		);
-
-		return std::make_pair(std::move(buffer), std::move(memory));
-	}
-};
-
 struct VulkanImageAndMemory {
 protected:	
 	vk::raii::Image image;
@@ -923,6 +794,147 @@ public:
 		image = std::move(o.image);
 		memory = std::move(o.memory);
 		return *this;
+	}
+};
+
+//copying the whole thing from VulkanImageAndMemory because I need the return type of operator= to be child-most, not parent-most
+struct VulkanBufferAndMemory {
+protected:	
+	vk::raii::Buffer buffer;
+	vk::raii::DeviceMemory memory;
+public:
+	auto const & getBuffer() const { return buffer; }
+	auto const & getMemory() const { return memory; }
+	
+	VulkanBufferAndMemory(
+		vk::raii::Buffer && buffer_,
+		vk::raii::DeviceMemory && memory_
+	) :	buffer(std::move(buffer_)),
+		memory(std::move(memory_))
+	{}
+
+	VulkanBufferAndMemory(VulkanBufferAndMemory && o)
+	: 	buffer(std::move(o.buffer)),
+		memory(std::move(o.memory))
+	{}
+
+	VulkanBufferAndMemory & operator=(VulkanBufferAndMemory && o) {
+		buffer = std::move(o.buffer);
+		memory = std::move(o.memory);
+		return *this;
+	}
+};
+
+
+namespace VulkanDeviceMakeFromStagingBuffer {
+	auto create(
+		vk::raii::PhysicalDevice const & physicalDevice,
+		vk::raii::Device const & device,
+		void const * const srcData,
+		size_t bufferSize
+	) {
+		auto buffer = vk::raii::Buffer(
+			device,
+			vk::BufferCreateInfo()
+				.setSize(bufferSize)
+				.setUsage(vk::BufferUsageFlagBits::eTransferSrc)
+				.setSharingMode(vk::SharingMode::eExclusive)
+		);
+		auto memRequirements = (*device).getBufferMemoryRequirements(*buffer);
+		auto memory = vk::raii::DeviceMemory(
+			device,
+			vk::MemoryAllocateInfo()
+				.setAllocationSize(memRequirements.size)
+				.setMemoryTypeIndex(VulkanPhysicalDevice::findMemoryType(
+					physicalDevice,
+					memRequirements.memoryTypeBits,
+					vk::MemoryPropertyFlagBits::eHostVisible
+					| vk::MemoryPropertyFlagBits::eHostCoherent
+				))
+		);
+		(*device).bindBufferMemory(
+			*buffer,
+			*memory,
+			0
+		);
+
+		void * dstData = memory.mapMemory(
+			0,
+			bufferSize,
+			vk::MemoryMapFlags{}
+		);
+		memcpy(dstData, srcData, (size_t)bufferSize);
+		memory.unmapMemory();
+		
+		return std::make_unique<VulkanBufferAndMemory>(std::move(buffer), std::move(memory));
+	}
+};
+
+namespace VulkanDeviceMemoryBuffer  {
+	auto create(
+		vk::raii::PhysicalDevice const & physicalDevice,
+		vk::raii::Device const & device,
+		vk::DeviceSize size,
+		vk::BufferUsageFlags usage,
+		vk::MemoryPropertyFlags properties
+	) {
+		auto buffer = vk::raii::Buffer(
+			device,
+			vk::BufferCreateInfo()
+				.setFlags(vk::BufferCreateFlags())
+				.setSize(size)
+				.setUsage(usage)
+				.setSharingMode(vk::SharingMode::eExclusive)
+		);
+		auto memRequirements = (*device).getBufferMemoryRequirements(*buffer);
+		auto memory = vk::raii::DeviceMemory(
+			device,
+			vk::MemoryAllocateInfo()
+				.setAllocationSize(memRequirements.size)
+				.setMemoryTypeIndex(VulkanPhysicalDevice::findMemoryType(
+					physicalDevice,
+					memRequirements.memoryTypeBits,
+					properties
+				))
+		);
+		(*device).bindBufferMemory(
+			*buffer,
+			*memory,
+			0
+		);
+		return std::make_unique<VulkanBufferAndMemory>(std::move(buffer), std::move(memory));
+	}
+
+	auto makeBufferFromStaged(
+		vk::raii::PhysicalDevice const & physicalDevice,
+		vk::raii::Device const & device,
+		VulkanCommandPool const & commandPool,
+		void const * const srcData,
+		size_t bufferSize
+	) {
+		auto stagingBufferAndMemory = VulkanDeviceMakeFromStagingBuffer::create(
+			physicalDevice,
+			device,
+			srcData,
+			bufferSize
+		);
+
+		auto bufferAndMemory = VulkanDeviceMemoryBuffer::create(
+			physicalDevice,
+			device,
+			bufferSize,
+			vk::BufferUsageFlagBits::eTransferDst
+			| vk::BufferUsageFlagBits::eVertexBuffer,
+			vk::MemoryPropertyFlagBits::eDeviceLocal
+		);
+		
+		commandPool.copyBuffer(
+			*stagingBufferAndMemory->getBuffer(),
+			*bufferAndMemory->getBuffer(),
+			bufferSize
+		);
+
+		return bufferAndMemory;
 	}
 };
 
@@ -970,7 +982,7 @@ namespace VulkanDeviceMemoryImage {
 		return std::make_unique<VulkanImageAndMemory>(std::move(image), std::move(imageMemory));
 	}
 
-	std::unique_ptr<VulkanImageAndMemory> makeTextureFromStaged(
+	auto makeTextureFromStaged(
 		vk::raii::PhysicalDevice const & physicalDevice,
 		vk::raii::Device const & device,
 		VulkanCommandPool const & commandPool,
@@ -980,17 +992,14 @@ namespace VulkanDeviceMemoryImage {
 		int texHeight,
 		uint32_t mipLevels
 	) {
-		std::unique_ptr<vk::raii::Buffer> stagingBuffer;
-		std::unique_ptr<vk::raii::DeviceMemory> stagingBufferMemory;
-		std::tie(stagingBuffer, stagingBufferMemory) 
-		= VulkanDeviceMakeFromStagingBuffer::create(
+		auto stagingBufferAndMemory = VulkanDeviceMakeFromStagingBuffer::create(
 			physicalDevice,
 			device,
 			srcData,
 			bufferSize
 		);
 
-		std::unique_ptr<VulkanImageAndMemory> imageAndMemory = createImage(
+		auto imageAndMemory = createImage(
 			physicalDevice,
 			device,
 			texWidth,
@@ -1012,7 +1021,7 @@ namespace VulkanDeviceMemoryImage {
 			mipLevels
 		);
 		commandPool.copyBufferToImage(
-			**stagingBuffer,
+			*stagingBufferAndMemory->getBuffer(),
 			*imageAndMemory->getImage(),
 			(uint32_t)texWidth,
 			(uint32_t)texHeight
@@ -1526,10 +1535,8 @@ protected:
 	std::unique_ptr<VulkanGraphicsPipeline> graphicsPipeline;
 	std::unique_ptr<VulkanCommandPool> commandPool;
 	
-	std::unique_ptr<vk::raii::Buffer> vertexBuffer;
-	std::unique_ptr<vk::raii::DeviceMemory> vertexBufferMemory;
-	std::unique_ptr<vk::raii::Buffer> indexBuffer;
-	std::unique_ptr<vk::raii::DeviceMemory> indexBufferMemory;
+	std::unique_ptr<VulkanBufferAndMemory> vertexBufferAndMemory;
+	std::unique_ptr<VulkanBufferAndMemory> indexBufferAndMemory;
 	
 	uint32_t mipLevels = {};
 
@@ -1541,10 +1548,7 @@ protected:
 	std::vector<uint32_t> indices;
 
 	// hmm combine these two into a class?
-	std::vector<std::pair<
-		std::unique_ptr<vk::raii::Buffer>,
-		std::unique_ptr<vk::raii::DeviceMemory>
-	>> uniformBuffers;
+	std::vector<std::unique_ptr<VulkanBufferAndMemory>> uniformBuffers;
 	std::vector<void*> uniformBuffersMapped;
 	
 	std::unique_ptr<vk::raii::DescriptorPool> descriptorPool;
@@ -1686,8 +1690,7 @@ public:
 
 		loadModel();
 		
-		std::tie(vertexBuffer, vertexBufferMemory) 
-		= VulkanDeviceMemoryBuffer::makeBufferFromStaged(
+		vertexBufferAndMemory = VulkanDeviceMemoryBuffer::makeBufferFromStaged(
 			physicalDevice,
 			device(),
 			*commandPool,
@@ -1695,8 +1698,7 @@ public:
 			sizeof(vertices[0]) * vertices.size()
 		);
 
-		std::tie(indexBuffer, indexBufferMemory)
-		= VulkanDeviceMemoryBuffer::makeBufferFromStaged(
+		indexBufferAndMemory = VulkanDeviceMemoryBuffer::makeBufferFromStaged(
 			physicalDevice,
 			device(),
 			*commandPool,
@@ -1715,7 +1717,7 @@ public:
 					| vk::MemoryPropertyFlagBits::eHostCoherent
 				)
 			);
-			uniformBuffersMapped.push_back(std::get<1>(uniformBuffers[i])->mapMemory(
+			uniformBuffersMapped.push_back(uniformBuffers[i]->getMemory().mapMemory(
 				0,
 				sizeof(UniformBufferObject),
 				vk::MemoryMapFlags{}
@@ -1762,10 +1764,8 @@ public:
 
 		uniformBuffers.clear();
 		
-		indexBufferMemory = {};
-		indexBuffer = {};
-		vertexBufferMemory = {};
-		vertexBuffer = {};
+		indexBufferAndMemory = {};
+		vertexBufferAndMemory = {};
 
 		textureSampler = {};
 		textureImageView = {};
@@ -2087,13 +2087,13 @@ protected:
 			commandBuffer.bindVertexBuffers(
 				0,
 				Common::make_array(
-					**vertexBuffer
+					*vertexBufferAndMemory->getBuffer()
 				),
 				Common::make_array<vk::DeviceSize>(0)
 			);
 
 			commandBuffer.bindIndexBuffer(
-				**indexBuffer,
+				*indexBufferAndMemory->getBuffer(),
 				0,
 				vk::IndexType::eUint32
 			);
@@ -2141,7 +2141,7 @@ protected:
 
 		for (size_t i = 0; i < maxFramesInFlight; i++) {
 			auto bufferInfo = vk::DescriptorBufferInfo()
-				.setBuffer(**std::get<0>(uniformBuffers[i]))
+				.setBuffer(*uniformBuffers[i]->getBuffer())
 				.setRange(sizeof(UniformBufferObject));
 			auto imageInfo = vk::DescriptorImageInfo()
 				.setSampler(**textureSampler)
