@@ -170,10 +170,16 @@ namespace std {
 
 template<int dim>
 struct hash<Tensor::floatN<dim>> {
+	union FI {
+		float f;
+		uint32_t i;
+	};
 	size_t operator()(Tensor::floatN<dim> const & v) const {
+		FI fi;
 		uint32_t h = {};
 		for (auto x : v) {
-			h ^= hash<uint32_t>()(*(uint32_t const *)&x);
+			fi.f = x;
+			h ^= hash<uint32_t>()(fi.i);
 		}
 		return h;
 	}
