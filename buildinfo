@@ -17,32 +17,21 @@ if platform == 'linux' then
 	env:addPackages'tinyobjloader'
 end
 
-local function exec(cmd)
-	print('>> '..cmd)
-	assert(os.execute(cmd))
+local fns = {
+	{src='shader.vert', dst='shader-vert.spv'},
+	{src='shader.frag', dst='shader-frag.spv'},
+}
+for _,fn in ipairs(fns) do
+	env.targets:add{
+		dsts = {env:getResourcePath()..'/'..fn.dst},
+		srcs = {'res/'..fn.src},
+		rule = function(r)
+			env:exec('glslangValidator -V "'..r.srcs[1]..'" -o "'..r.dsts[1]..'"')
+		end,
+	}
 end
--- TODO this in 'dist' or this in base folder?
--- resPath is in dist
--- in fact for linux it matches dist
--- wait I thought res/ was copied into dist resource path by default?
-function postBuildDist(resPath)
-	print"compiling shaders..."
-	local tool
-	local function compileShader(from, to)
-		from = 'res/'..from
-		to = resPath..'/'..to
-		if not needsUpdate(to, {from}) then return end
-		-- hmm, external tool ...
-		exec(tool..' "'..from..'" -o "'..to..'"')
-	end
-	-- [[ if I had glslc
-	tool = 'glslangValidator -V'
-	compileShader('shader.vert', 'shader-vert.spv')
-	compileShader('shader.frag', 'shader-frag.spv')
-	--]]
-	--[[ but I have clspv
-	tool = 'clspv'
-	compileShader('shader-vert.cl', 'shader-vert.spv')
-	compileShader('shader-frag.cl', 'shader-frag.spv')
-	--]]
+function postBuildDist()
+	env.targets:run(table.mapi(fns, function(fn)
+		return env:getResourcePath()..'/'..fn.dst
+	end):unpack())
 end
