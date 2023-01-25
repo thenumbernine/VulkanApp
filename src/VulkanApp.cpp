@@ -61,74 +61,6 @@ constexpr auto generate_vector(
 
 }
 
-// TODO put this somewhere maybe
-namespace Tensor {
-
-//glRotatef
-template<typename real, typename Src>
-requires (Src::dims() == int2(4,4))
-_mat<real,4,4> rotate(
-	Src src,
-	real rad,
-	_vec<real,3> axis
-) {
-	auto q = Tensor::_quat<real>(axis.x, axis.y, axis.z, rad)
-		.fromAngleAxis();
-	auto x = q.xAxis();
-	auto y = q.yAxis();
-	auto z = q.zAxis();
-	//which is faster?
-	// this 4x4 mat mul?
-	// or quat-rotate the col vectors of mq?
-	_mat<real,4,4> mq = {
-		{x.x, y.x, z.x, 0},
-		{x.y, y.y, z.y, 0},
-		{x.z, y.z, z.z, 0},
-		{0, 0, 0, 1}
-	};
-	return src * mq;
-}
-
-//gluLookAt
-//https://stackoverflow.com/questions/21830340/understanding-glmlookat
-template<typename real>
-_mat<real,4,4> lookAt(
-	_vec<real,3> eye,
-	_vec<real,3> center,
-	_vec<real,3> up
-) {
-	auto Z = (eye - center).normalize();
-	auto Y = up;
-	auto X = Y.cross(Z).normalize();
-	Y = Z.cross(X);
-	return _mat<real,4,4>{
-		{X.x, X.y, X.z, -eye.dot(X)},
-		{Y.x, Y.y, Y.z, -eye.dot(Y)},
-		{Z.x, Z.y, Z.x, -eye.dot(Z)},
-		{0, 0, 0, 1},
-	};
-}
-
-//gluPerspective
-template<typename real>
-_mat<real,4,4> perspective(
-	real fovy,
-	real aspectRatio,
-	real zNear,
-	real zFar
-) {
-	real f = 1./tan(fovy*(real).5);
-	real neginvdz = (real)1 / (zNear - zFar);
-	return _mat<real,4,4>{
-		{f/aspectRatio, 0, 0, 0},
-		{0, f, 0, 0},
-		{0, 0, (zFar+zNear) * neginvdz, (real)2*zFar*zNear * neginvdz},
-		{0, 0, -1, 0},
-	};
-}
-
-}
-
 struct Vertex {
 	Tensor::float3 pos;
 	Tensor::float3 color;
@@ -297,7 +229,7 @@ struct VulkanPhysicalDevice {
 				// I can return a raii::PHysicalDevice as-is here
 				// buut the source variable can't be initialized with a default/empty cotr
 				// so i'll make the source a uique_ptr
-				// but then that means i have to reutnr a make_unique....... 
+				// but then that means i have to reutnr a make_unique.......
 				// hmm.......
 				return physDev;
 			}
@@ -360,7 +292,7 @@ public:
 		vk::raii::PhysicalDevice const & physDev
 	) {
 		auto props = physDev.getProperties();
-		auto counts = props.limits.framebufferColorSampleCounts 
+		auto counts = props.limits.framebufferColorSampleCounts
 			& props.limits.framebufferDepthSampleCounts;
 		if (counts & vk::SampleCountFlagBits::e64) { return vk::SampleCountFlagBits::e64; }
 		if (counts & vk::SampleCountFlagBits::e32) { return vk::SampleCountFlagBits::e32; }
@@ -450,7 +382,7 @@ public:
 	) {
 		auto memProps = physDev.getMemoryProperties();
 		for (uint32_t i = 0; i < memProps.memoryTypeCount; i++) {
-			if ((mask & (1 << i)) && 
+			if ((mask & (1 << i)) &&
 				(memProps.memoryTypes[i].propertyFlags & props)
 			) {
 				return i;
@@ -469,7 +401,7 @@ std::vector<char const *> validationLayers = {
 // separate class for sole purpose of constructing device
 // I've lumped in 'graphicsQueue' and 'presentQueue' because their ctor depends on the 'indices' var which is used to ctor 'device' as well
 struct VulkanDevice {
-protected:	
+protected:
 	//owns:
 	vk::raii::Device device;
 	vk::raii::Queue graphicsQueue;
@@ -506,7 +438,7 @@ protected:
 		auto thisValidationLayers = std::vector<char const *>();
 		if (enableValidationLayers) {
 			thisValidationLayers = validationLayers;
-		}	
+		}
 		return vk::raii::Device(
 			physicalDevice,
 			vk::DeviceCreateInfo()
@@ -522,7 +454,7 @@ public:
 		std::vector<char const *> const & deviceExtensions,
 		bool enableValidationLayers,
 		VulkanPhysicalDevice::QueueFamilyIndices const & indices
-	) : 
+	) :
 		device(createDevice(
 			physicalDevice,
 			deviceExtensions,
@@ -616,7 +548,7 @@ struct VulkanRenderPass  {
 };
 
 struct VulkanSingleTimeCommand  {
-protected:	
+protected:
 	//owns:
 	std::vector<vk::raii::CommandBuffer> cmds;
 	//held:
@@ -628,7 +560,7 @@ public:
 		vk::raii::Device const & device,
 		vk::raii::Queue const & queue_,
 		vk::raii::CommandPool const & commandPool
-	) : 
+	) :
 		cmds(
 			device.allocateCommandBuffers(
 	//			commandPool,
@@ -752,7 +684,7 @@ public:
 		vk::PipelineStageFlags sourceStage;
 		vk::PipelineStageFlags destinationStage;
 
-		if (oldLayout == vk::ImageLayout::eUndefined && 
+		if (oldLayout == vk::ImageLayout::eUndefined &&
 			newLayout == vk::ImageLayout::eTransferDstOptimal
 		) {
 			barrier.srcAccessMask = {};
@@ -760,7 +692,7 @@ public:
 
 			sourceStage = vk::PipelineStageFlagBits::eTopOfPipe;
 			destinationStage = vk::PipelineStageFlagBits::eTransfer;
-		} else if (oldLayout == vk::ImageLayout::eTransferDstOptimal && 
+		} else if (oldLayout == vk::ImageLayout::eTransferDstOptimal &&
 			newLayout == vk::ImageLayout::eShaderReadOnlyOptimal
 		) {
 			barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
@@ -784,7 +716,7 @@ public:
 };
 
 struct VulkanImageAndMemory {
-protected:	
+protected:
 	vk::raii::Image image;
 	vk::raii::DeviceMemory memory;
 public:
@@ -814,7 +746,7 @@ struct VulkanBufferMemoryAndMapped;
 //copying the whole thing from VulkanImageAndMemory because I need the return type of operator= to be child-most, not parent-most
 struct VulkanBufferAndMemory {
 	friend struct VulkanBufferMemoryAndMapped;
-protected:	
+protected:
 	vk::raii::Buffer buffer;
 	vk::raii::DeviceMemory memory;
 public:
@@ -841,7 +773,7 @@ public:
 };
 
 struct VulkanBufferMemoryAndMapped {
-protected:	
+protected:
 	VulkanBufferAndMemory bm;
 	void * mapped = {};
 public:
@@ -1110,7 +1042,7 @@ public:
 	// ************** from here on down, app-specific **************
 	// but so are all the member variables so ...
 
-	VulkanSwapChain(VulkanSwapChain && o) 
+	VulkanSwapChain(VulkanSwapChain && o)
 	: 	obj(std::move(o.obj)),
 		renderPass(std::move(o.renderPass)),
 		depthImageAndMemory(std::move(o.depthImageAndMemory)),
@@ -1410,7 +1342,7 @@ public:
 	auto const & getPipelineLayout() const { return pipelineLayout; }
 	auto const & getDescriptorSetLayout() const { return descriptorSetLayout; }
 	
-	//TODO protect? 
+	//TODO protect?
 	VulkanGraphicsPipeline(
 		vk::raii::Pipeline && obj_,
 		vk::raii::PipelineLayout && pipelineLayout_,
@@ -1702,7 +1634,7 @@ protected:
 public:
 	void setFramebufferResized() { framebufferResized = true; }
 
-protected:	
+protected:
 	// has to be called only after all fields above 'swapChain' have been initialized
 	VulkanSwapChain createSwapChain() {
 		return VulkanSwapChain::create(
@@ -1724,13 +1656,13 @@ public:
 			}
 			return VulkanInstance::create(ctx, app, enableValidationLayers);
 		}()),
-		debug(!enableValidationLayers 
-			? std::unique_ptr<vk::raii::DebugUtilsMessengerEXT>{} 
+		debug(!enableValidationLayers
+			? std::unique_ptr<vk::raii::DebugUtilsMessengerEXT>{}
 			: std::make_unique<vk::raii::DebugUtilsMessengerEXT>(
 				instance,
 				vk::DebugUtilsMessengerCreateInfoEXT()
 					.setMessageSeverity(
-						vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose 
+						vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose
 							| vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning
 							| vk::DebugUtilsMessageSeverityFlagBitsEXT::eError
 					)
@@ -1788,7 +1720,7 @@ public:
 				vk::CommandPoolCreateInfo()
 					.setFlags(vk::CommandPoolCreateFlagBits::eResetCommandBuffer)
 					.setQueueFamilyIndex(queueFamilyIndices.graphicsFamily.value())
-			);	
+			);
 		}()),
 		textureImageAndMemory(createTextureImage()),
 		textureImageView(VulkanSwapChain::createImageView(
@@ -1838,7 +1770,7 @@ public:
 					sizeof(UniformBufferObject),
 					vk::MemoryMapFlags{}
 				);
-				return VulkanBufferMemoryAndMapped(std::move(b), std::move(m));		
+				return VulkanBufferMemoryAndMapped(std::move(b), std::move(m));
 			}
 		)),
 		descriptorPool([this](){
@@ -1880,7 +1812,7 @@ public:
 		)),
 		inFlightFences(Common::generate_vector<vk::raii::Fence>(
 			maxFramesInFlight,
-			[this]() { 
+			[this]() {
 				return device().createFence(
 					vk::FenceCreateInfo()
 						.setFlags(vk::FenceCreateFlagBits::eSignaled)
@@ -2241,27 +2173,42 @@ protected:
 		auto currentTime = std::chrono::high_resolution_clock::now();
 		float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
 
+		auto ar =(float)swapChain.extent.width / (float)swapChain.extent.height;
+
 		// .transpose() all because I use row-major, Vulkan/GL uses column-major
-		// TODO no reason I can't make row-order template-driven...
+		// TODO no reason I can't make row-vs-col major memory layout be template-driven...
 		auto ubo = UniformBufferObject{};
 		ubo.model = Tensor::rotate<float>(
-			Tensor::float4i4(1),
 			time * degToRad<float>(90),
 			Tensor::float3(0, 0, 1)
 		).transpose();
-		
-		//isn't working ...
 		ubo.view = Tensor::lookAt<float>(
 			Tensor::float3(2, 2, 2),
 			Tensor::float3(0, 0, 0),
 			Tensor::float3(0, 0, 1)
 		).transpose();
+#if 1
 		ubo.proj = Tensor::perspective<float>(
 			degToRad<float>(45),
-			(float)swapChain.extent.width / (float)swapChain.extent.height,
+			ar,
 			0.1f,
 			10
 		).transpose();
+#endif
+#if 0
+		ubo.proj = Tensor::frustum<float>(
+			-.1 * ar, .1 * ar,
+			-.1, .1,
+			.1, 10
+		).transpose();
+#endif
+#if 0
+		ubo.proj = Tensor::ortho<float>(
+			-2*ar, 2*ar,
+			-2, 2,
+			-10, 10
+		).transpose();
+#endif
 		ubo.proj[1][1] *= -1;
 		memcpy(uniformBuffers[currentFrame_].getMapped(), &ubo, sizeof(ubo));
 	}
@@ -2295,7 +2242,7 @@ public:
 				recreateSwapChain();
 				return;
 			} else if (
-				result != vk::Result::eSuccess && 
+				result != vk::Result::eSuccess &&
 				result != vk::Result::eSuboptimalKHR
 			) {
 				throw Common::Exception() << "vkAcquireNextImageKHR failed: " << result;
@@ -2350,8 +2297,8 @@ public:
 			.setSwapchains(swapChains)
 			.setPImageIndices(&imageIndex)
 		);
-		if (result == vk::Result::eErrorOutOfDateKHR || 
-			result == vk::Result::eSuboptimalKHR || 
+		if (result == vk::Result::eErrorOutOfDateKHR ||
+			result == vk::Result::eSuboptimalKHR ||
 			framebufferResized
 		) {
 			framebufferResized = false;
