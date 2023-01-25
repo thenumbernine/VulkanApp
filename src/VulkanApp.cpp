@@ -97,14 +97,14 @@ _mat<real,4,4> lookAt(
 	_vec<real,3> center,
 	_vec<real,3> up
 ) {
-	auto Z = (center - eye).normalize();
+	auto Z = (eye - center).normalize();
 	auto Y = up;
 	auto X = Y.cross(Z).normalize();
 	Y = Z.cross(X);
 	return _mat<real,4,4>{
-		{X.x, Y.x, -Z.x, -eye.dot(X)},
-		{X.y, Y.y, -Z.y, -eye.dot(Y)},
-		{X.z, Y.z, -Z.z, -eye.dot(Z)},
+		{X.x, X.y, X.z, -eye.dot(X)},
+		{Y.x, Y.y, Y.z, -eye.dot(Y)},
+		{Z.x, Z.y, Z.x, -eye.dot(Z)},
 		{0, 0, 0, 1},
 	};
 }
@@ -2241,72 +2241,28 @@ protected:
 		auto currentTime = std::chrono::high_resolution_clock::now();
 		float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
 
+		// .transpose() all because I use row-major, Vulkan/GL uses column-major
+		// TODO no reason I can't make row-order template-driven...
 		auto ubo = UniformBufferObject{};
 		ubo.model = Tensor::rotate<float>(
 			Tensor::float4i4(1),
 			time * degToRad<float>(90),
 			Tensor::float3(0, 0, 1)
-		);
+		).transpose();
+		
 		//isn't working ...
 		ubo.view = Tensor::lookAt<float>(
 			Tensor::float3(2, 2, 2),
 			Tensor::float3(0, 0, 0),
 			Tensor::float3(0, 0, 1)
-		);
+		).transpose();
 		ubo.proj = Tensor::perspective<float>(
 			degToRad<float>(45),
 			(float)swapChain.extent.width / (float)swapChain.extent.height,
 			0.1f,
 			10
-		);
+		).transpose();
 		ubo.proj[1][1] *= -1;
-/*
-working buffer.  in-order in memory as it gets passed to Vulkan:
-float[3][4][4] buf = {
-	//model
-	{
-		{-0.724425, 0.689354, 0.000000, 0.000000},
-		{-0.689354, -0.724425, 0.000000, 0.000000},
-		{0.000000, 0.000000, 1.000000, 0.000000},
-		{0.000000, 0.000000, 0.000000, 1.000000},
-	},
-	//view
-	{
-		{-0.707107, -0.408248, 0.577350, 0.000000},
-		{0.707107, -0.408248, 0.577350, 0.000000},
-		{0.000000, 0.816497, 0.577350, 0.000000},
-		{-0.000000, -0.000000, -3.464102, 1.000000},
-	},
-	//proj
-	{
-		{1.810660, 0.000000, 0.000000, 0.000000},
-		{0.000000, -2.414213, 0.000000, 0.000000},
-		{0.000000, 0.000000, -1.020202, -1.000000},
-		{0.000000, 0.000000, -0.202020, 0.000000},
-	},
-};
-*/
-		// I use row-major, Vulkan/GL uses column-major
-		ubo.model = ubo.model.transpose();
-		ubo.view = ubo.view.transpose();
-		ubo.proj = ubo.proj.transpose();
-
-		ubo.view = {
-			{-0.707107, -0.408248, 0.577350, 0.000000},
-			{0.707107, -0.408248, 0.577350, 0.000000},
-			{0.000000, 0.816497, 0.577350, 0.000000},
-			{-0.000000, -0.000000, -3.464102, 1.000000},
-		};
-
-//std::cout << ubo.view << std::endl;
-/*
-{
-	{0.707107, -0.707107, 0, 0},
-	{-0.408248, -0.408248, 0.816497, 0},
-	{0.57735, 0.57735, 0.57735, 0},
-	{-0, -0, 3.4641, 1}
-}
-*/
 		memcpy(uniformBuffers[currentFrame_].getMapped(), &ubo, sizeof(ubo));
 	}
 public:
