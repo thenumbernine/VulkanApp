@@ -151,7 +151,7 @@ struct VulkanInstance {
 
 		// vk::ApplicationInfo needs title:
 		auto title = app->getTitle();
-		
+
 		// vkCreateInstance needs appInfo
 		auto appInfo = vk::ApplicationInfo()
 			.setPApplicationName(title.c_str())
@@ -167,7 +167,7 @@ struct VulkanInstance {
 			//layerNames.push_back("VK_LAYER_LUNARG_standard_validation");	//nope
 			layerNames.push_back("VK_LAYER_KHRONOS_validation");	//nope
 		}
-		
+
 		// vkCreateInstance needs extensions
 		auto extensions = getRequiredExtensions(app, enableValidationLayers);
 
@@ -226,7 +226,7 @@ struct VulkanPhysicalDevice {
 
 		for (auto const & physDev : physDevs) {
 			if (isDeviceSuitable(physDev, surface, deviceExtensions)) {
-				// I can return a raii::PHysicalDevice as-is here
+				// I can return a raii::PhysicalDevice as-is here
 				// buut the source variable can't be initialized with a default/empty cotr
 				// so i'll make the source a uique_ptr
 				// but then that means i have to reutnr a make_unique.......
@@ -580,7 +580,7 @@ public:
 		);
 		//end part that matches
 	}
-	
+
 	~VulkanSingleTimeCommand() {
 		cmds[0].end();
 		auto vkcmds = Common::make_array(
@@ -603,7 +603,7 @@ protected:
 	vk::raii::Queue const & graphicsQueue;
 public:
 	auto const & operator()() const { return commandPool; }
-	
+
 	VulkanCommandPool(
 		vk::raii::Device const & device_,
 		vk::raii::Queue const & graphicsQueue_,
@@ -722,7 +722,7 @@ protected:
 public:
 	auto const & getImage() const { return image; }
 	auto const & getMemory() const { return memory; }
-	
+
 	VulkanImageAndMemory(
 		vk::raii::Image && image_,
 		vk::raii::DeviceMemory && memory_
@@ -752,7 +752,7 @@ protected:
 public:
 	auto const & getBuffer() const { return buffer; }
 	auto const & getMemory() const { return memory; }
-	
+
 	VulkanBufferAndMemory(
 		vk::raii::Buffer && buffer_,
 		vk::raii::DeviceMemory && memory_
@@ -780,7 +780,7 @@ public:
 	auto const & getBuffer() const { return bm.getBuffer(); }
 	auto const & getMemory() const { return bm.getMemory(); }
 	void * getMapped() { return mapped; }
-	
+
 	VulkanBufferMemoryAndMapped(
 		VulkanBufferAndMemory && bm_,
 		void * && mapped_
@@ -839,7 +839,7 @@ namespace VulkanDeviceMakeFromStagingBuffer {
 		);
 		memcpy(dstData, srcData, (size_t)bufferSize);
 		memory.unmapMemory();
-		
+
 		return VulkanBufferAndMemory(std::move(buffer), std::move(memory));
 	}
 };
@@ -901,7 +901,7 @@ namespace VulkanDeviceMemoryBuffer  {
 			| vk::BufferUsageFlagBits::eVertexBuffer,
 			vk::MemoryPropertyFlagBits::eDeviceLocal
 		);
-		
+
 		commandPool.copyBuffer(
 			*stagingBufferAndMemory.getBuffer(),
 			*bufferAndMemory.getBuffer(),
@@ -1008,7 +1008,7 @@ namespace VulkanDeviceMemoryImage {
 			mipLevels
 		);
 		*/
-	
+
 		//compiler tells me to remove this ... but won't that still call the dtor?
 		//return std::move(imageAndMemory);
 		return imageAndMemory;
@@ -1023,18 +1023,18 @@ protected:
 
 	VulkanImageAndMemory depthImageAndMemory;
 	vk::raii::ImageView depthImageView;
-	
+
 	VulkanImageAndMemory colorImageAndMemory;
 	vk::raii::ImageView colorImageView;
 public:
 	vk::Extent2D extent;
-	
+
 	// I would combine these into one struct so they can be dtored together
 	// but it seems vulkan wants vk::Images linear for its getter?
 	std::vector<vk::Image> images;
 	std::vector<vk::raii::ImageView> imageViews;
 	std::vector<vk::raii::Framebuffer> framebuffers;
-	
+
 public:
 	auto const & operator()() const { return obj; }
 	auto const & getRenderPass() const { return renderPass; }
@@ -1146,7 +1146,7 @@ public:
 		for (auto const & vkimage : obj.getImages()) {
 			images.push_back(vk::Image(vkimage));
 		}
-		
+
 		std::vector<vk::raii::ImageView> imageViews;
 		for (size_t i = 0; i < images.size(); i++) {
 			imageViews.push_back(createImageView(
@@ -1157,17 +1157,17 @@ public:
 				1
 			));
 		}
-	
+
 		auto renderPass = VulkanRenderPass::create(
 			physicalDevice,
 			device,
 			surfaceFormat.format,
 			msaaSamples
 		);
-		
+
 		//createColorResources
 		auto colorFormat = surfaceFormat.format;
-		
+
 		auto colorImageAndMemory = VulkanDeviceMemoryImage::createImage(
 			physicalDevice,
 			device,
@@ -1187,10 +1187,10 @@ public:
 			vk::ImageAspectFlagBits::eColor,
 			1
 		);
-		
+
 		//createDepthResources
 		auto depthFormat = VulkanPhysicalDevice::findDepthFormat(physicalDevice);
-		
+
 		auto depthImageAndMemory = VulkanDeviceMemoryImage::createImage(
 			physicalDevice,
 			device,
@@ -1210,7 +1210,7 @@ public:
 			vk::ImageAspectFlagBits::eDepth,
 			1
 		);
-		
+
 		//createFramebuffers
 		std::vector<vk::raii::Framebuffer> framebuffers;
 		for (size_t i = 0; i < imageViews.size(); i++) {
@@ -1231,7 +1231,7 @@ public:
 				)
 			);
 		}
-	
+
 		return VulkanSwapChain(
 			std::move(obj),
 			std::move(renderPass),
@@ -1341,7 +1341,7 @@ public:
 	auto const & operator()() const { return obj; }
 	auto const & getPipelineLayout() const { return pipelineLayout; }
 	auto const & getDescriptorSetLayout() const { return descriptorSetLayout; }
-	
+
 	//TODO protect?
 	VulkanGraphicsPipeline(
 		vk::raii::Pipeline && obj_,
@@ -1372,7 +1372,7 @@ public:
 				.setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
 				.setDescriptorCount(1)
 				.setStageFlags(vk::ShaderStageFlagBits::eFragment)
-			
+
 		);
 		auto descriptorSetLayout = vk::raii::DescriptorSetLayout(
 			device,
@@ -1382,7 +1382,7 @@ public:
 
 		auto vertShaderModule = VulkanShaderModule::fromFile(device, "shader-vert.spv");
 		auto fragShaderModule = VulkanShaderModule::fromFile(device, "shader-frag.spv");
-		
+
 		auto bindingDescriptions = Common::make_array(
 			Vertex::getBindingDescription()
 		);
@@ -1442,7 +1442,7 @@ public:
 		);
 		auto dynamicState = vk::PipelineDynamicStateCreateInfo()
 			.setDynamicStates(dynamicStates);
-		
+
 		auto descriptorSetLayouts = Common::make_array(
 			*descriptorSetLayout
 		);
@@ -1514,7 +1514,7 @@ public:
 		vk::raii::Device const & device,
 		VulkanCommandPool const & commandPool
 	) {
-		
+
 		tinyobj::attrib_t attrib;
 		std::vector<tinyobj::shape_t> shapes;
 		std::vector<tinyobj::material_t> materials;
@@ -1536,7 +1536,7 @@ public:
 				};
 
 				vertex.color = {1.0f, 1.0f, 1.0f};
-				
+
 				vertex.texCoord = {
 					attrib.texcoords[2 * index.texcoord_index + 0],
 					1.0f - attrib.texcoords[2 * index.texcoord_index + 1]
@@ -1551,7 +1551,7 @@ public:
 				indices.push_back(uniqueVertices[vertex]);
 			}
 		}
-		
+
 		auto vertexBufferAndMemory = VulkanDeviceMemoryBuffer::makeBufferFromStaged(
 			physicalDevice,
 			device,
@@ -1608,28 +1608,28 @@ protected:
 	VulkanSwapChain swapChain;
 	VulkanGraphicsPipeline graphicsPipeline;
 	VulkanCommandPool commandPool;
-	
+
 	//these two are initialized together:
 	uint32_t mipLevels = {};
 	VulkanImageAndMemory textureImageAndMemory;
-	
+
 	vk::raii::ImageView textureImageView;
 	vk::raii::Sampler textureSampler;
 
 	VulkanMesh mesh;
 	std::vector<VulkanBufferMemoryAndMapped> uniformBuffers;
 	vk::raii::DescriptorPool descriptorPool;
-	
+
 	// each of these, there are one per number of frames in flight
 	std::vector<vk::raii::DescriptorSet> descriptorSets;
 	std::vector<vk::raii::CommandBuffer> commandBuffers;
-	
+
 	std::vector<vk::raii::Semaphore> imageAvailableSemaphores;
 	std::vector<vk::raii::Semaphore> renderFinishedSemaphores;
 	std::vector<vk::raii::Fence> inFlightFences;
-	
+
 	uint32_t currentFrame = {};
-	
+
 	bool framebufferResized = {};
 public:
 	void setFramebufferResized() { framebufferResized = true; }
@@ -1851,7 +1851,7 @@ protected:
 			throw Common::Exception() << "failed to load image from " << texturePath;
 		}
 		auto texSize = image->getSize();
-		
+
 		// TODO move this into Image::Image setBitsPerPixel() or something
 		int texBPP = image->getBitsPerPixel() >> 3;
 		constexpr int desiredBPP = 4;
@@ -1870,11 +1870,11 @@ protected:
 			image = newimage;
 			texBPP = image->getBitsPerPixel() >> 3;
 		}
-		
+
 		char const * const srcData = image->getData();
 		vk::DeviceSize const bufferSize = texSize.x * texSize.y * texBPP;
 		mipLevels = (uint32_t)std::floor(std::log2(std::max(texSize.x, texSize.y))) + 1;
-	
+
 		auto textureImageAndMemory = VulkanDeviceMemoryImage::makeTextureFromStaged(
 			physicalDevice,
 			device(),
@@ -1885,7 +1885,7 @@ protected:
 			texSize.y,
 			mipLevels
 		);
-	
+
 		generateMipmaps(
 			textureImageAndMemory.getImage(),
 			vk::Format::eR8G8B8A8Srgb,
@@ -1927,7 +1927,7 @@ protected:
 					.setLevelCount(1)
 					.setLayerCount(1)
 			);
-		
+
 		int32_t mipWidth = texWidth;
 		int32_t mipHeight = texHeight;
 
@@ -1972,7 +1972,7 @@ protected:
 						1
 					)
 				));
-			
+
 			commandBuffer().blitImage(
 				*image,
 				vk::ImageLayout::eTransferSrcOptimal,
@@ -2167,7 +2167,7 @@ protected:
 
 protected:
 	decltype(std::chrono::high_resolution_clock::now()) startTime = std::chrono::high_resolution_clock::now();
-	
+
 	void updateUniformBuffer(uint32_t currentFrame_) {
 		//static auto startTime = std::chrono::high_resolution_clock::now();
 		auto currentTime = std::chrono::high_resolution_clock::now();
@@ -2270,7 +2270,7 @@ public:
 			vk::PipelineStageFlagBits::eColorAttachmentOutput
 		);
 		static_assert(waitSemaphores.size() == waitStages.size());
-		
+
 		auto signalSemaphores = Common::make_array(
 			*renderFinishedSemaphores[currentFrame]
 		);
@@ -2287,7 +2287,7 @@ public:
 			.setSignalSemaphores(signalSemaphores),
 			*inFlightFences[currentFrame]
 		);
-		
+
 		auto swapChains = Common::make_array(
 			*swapChain()
 		);
@@ -2320,7 +2320,7 @@ struct Test : public ::SDLApp::SDLApp {
 
 protected:
 	std::unique_ptr<VulkanCommon> vkCommon;
-	
+
 	virtual void initWindow() {
 		Super::initWindow();
 		vkCommon = std::make_unique<VulkanCommon>(this);
@@ -2345,7 +2345,7 @@ protected:
 
 		vkCommon->loopDone();
 	}
-	
+
 	virtual void onUpdate() {
 		Super::onUpdate();
 		vkCommon->drawFrame();
