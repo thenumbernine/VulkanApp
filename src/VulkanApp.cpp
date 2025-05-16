@@ -1671,6 +1671,8 @@ public:
 							| vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation
 							| vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance
 					)
+					// warning deprecated but I'm not using it so ...
+#if 0
 					.setPfnUserCallback(
 						[](
 							VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
@@ -1683,6 +1685,7 @@ public:
 							return VK_FALSE;
 						}
 					)
+#endif
 			)
 		),
 		surface([this](){
@@ -1871,7 +1874,7 @@ protected:
 			texBPP = image->getBitsPerPixel() >> 3;
 		}
 
-		char const * const srcData = image->getData();
+		uint8_t const * const srcData = image->getData();
 		vk::DeviceSize const bufferSize = texSize.x * texSize.y * texBPP;
 		mipLevels = (uint32_t)std::floor(std::log2(std::max(texSize.x, texSize.y))) + 1;
 
