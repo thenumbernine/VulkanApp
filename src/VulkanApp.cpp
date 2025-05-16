@@ -177,6 +177,9 @@ struct VulkanInstance {
 				.setPApplicationInfo(&appInfo)
 				.setPEnabledLayerNames(layerNames)
 				.setPEnabledExtensionNames(extensions)
+#ifdef PLATFORM_OSX // https://stackoverflow.com/a/72791361/2714073
+				.setFlags(vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR)
+#endif
 		);
 	}
 
@@ -200,6 +203,12 @@ protected:
 		if (enableValidationLayers) {
 			extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
 		}
+
+		// why won't this work on osx?
+#ifdef PLATFORM_OSX	// https://stackoverflow.com/a/72791361/2714073
+		extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+		extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
+#endif
 
 		return extensions;
 	}
@@ -1594,7 +1603,10 @@ protected:
 	//this is used by physicalDevice, so has to go above physicalDevice
 protected:
 	std::vector<char const *> const deviceExtensions = {
-		VK_KHR_SWAPCHAIN_EXTENSION_NAME
+		VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+#ifdef PLATFORM_OSX	// https://stackoverflow.com/a/72791361/2714073
+		"VK_KHR_portability_subset", //VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME,
+#endif
 	};
 
 
