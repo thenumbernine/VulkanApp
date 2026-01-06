@@ -1800,6 +1800,7 @@ public:
 			return vk::raii::DescriptorPool(
 				device(),
 				vk::DescriptorPoolCreateInfo()
+					.setFlags(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet)	//getting a weird runtime error about this flag not being set so ...
 					.setMaxSets(maxFramesInFlight)
 					//why aren't these two merged into one function?
 					.setPoolSizeCount(poolSizes.size())
