@@ -893,7 +893,8 @@ namespace VulkanDeviceMemoryBuffer  {
 		vk::raii::Device const & device,
 		VulkanCommandPool const & commandPool,
 		void const * const srcData,
-		size_t bufferSize
+		size_t bufferSize,
+		vk::BufferUsageFlags usage
 	) {
 		auto stagingBufferAndMemory = VulkanDeviceMakeFromStagingBuffer::create(
 			physicalDevice,
@@ -906,8 +907,7 @@ namespace VulkanDeviceMemoryBuffer  {
 			physicalDevice,
 			device,
 			bufferSize,
-			vk::BufferUsageFlagBits::eTransferDst
-			| vk::BufferUsageFlagBits::eVertexBuffer,
+			usage,
 			vk::MemoryPropertyFlagBits::eDeviceLocal
 		);
 
@@ -1566,7 +1566,9 @@ public:
 			device,
 			commandPool,
 			vertices.data(),
-			sizeof(vertices[0]) * vertices.size()
+			sizeof(vertices[0]) * vertices.size(),
+			vk::BufferUsageFlagBits::eTransferDst
+			| vk::BufferUsageFlagBits::eVertexBuffer
 		);
 		uint32_t numIndices = indices.size();
 		auto indexBufferAndMemory = VulkanDeviceMemoryBuffer::makeBufferFromStaged(
@@ -1574,7 +1576,9 @@ public:
 			device,
 			commandPool,
 			indices.data(),
-			sizeof(indices[0]) * indices.size()
+			sizeof(indices[0]) * indices.size(),
+			vk::BufferUsageFlagBits::eTransferDst
+			| vk::BufferUsageFlagBits::eIndexBuffer
 		);
 		return VulkanMesh(
 			std::move(vertexBufferAndMemory),
@@ -1594,7 +1598,7 @@ protected:
 	::SDLApp::SDLApp const * app = {};	// points back to the owner
 
 	//this is used by instance, so must go above instance
-#if 0	// extension not found on my vulkan implementation
+#if 1	// extension not found on my vulkan implementation
 	static constexpr bool const enableValidationLayers = true;
 #else
 	static constexpr bool const enableValidationLayers = false;
@@ -1684,14 +1688,14 @@ public:
 							| vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance
 					)
 					// warning deprecated but I'm not using it so ...
-#if 0
+#if 1
 					.setPfnUserCallback(
 						[](
-							VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
-							VkDebugUtilsMessageTypeFlagsEXT messageType,
-							VkDebugUtilsMessengerCallbackDataEXT const * pCallbackData,
+							vk::DebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+							vk::DebugUtilsMessageTypeFlagsEXT messageType,
+							vk::DebugUtilsMessengerCallbackDataEXT const * pCallbackData,
 							void * pUserData
-						) -> VKAPI_ATTR VkBool32 VKAPI_CALL
+						) -> VKAPI_ATTR vk::Bool32 VKAPI_CALL
 						{
 							std::cerr << "validation layer: " << pCallbackData->pMessage << std::endl;
 							return VK_FALSE;
@@ -2250,6 +2254,7 @@ public:
 			vk::Result result;
 			std::tie(result, imageIndex) = device().acquireNextImage2KHR(
 				vk::AcquireNextImageInfoKHR()
+					.setDeviceMask(1)
 					.setSwapchain(*swapChain())
 					.setTimeout(UINT64_MAX)
 					.setSemaphore(*imageAvailableSemaphores[currentFrame])
