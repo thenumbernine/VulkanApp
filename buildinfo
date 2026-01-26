@@ -17,21 +17,42 @@ if platform == 'linux' then
 	env:addPackages'tinyobjloader'
 end
 
+local resOut = env:getResourcePath()
 local fns = {
 	{src='shader.vert', dst='shader-vert.spv'},
 	{src='shader.frag', dst='shader-frag.spv'},
 }
 for _,fn in ipairs(fns) do
 	env.targets:add{
-		dsts = {env:getResourcePath()..'/'..fn.dst},
+		dsts = {'res/'..fn.dst},
 		srcs = {'res/'..fn.src},
 		rule = function(r)
-			env:exec('glslangValidator -V "'..r.srcs[1]..'" -o "'..r.dsts[1]..'"')
+			env:exec(table{
+				'glslangValidator',
+				'-V',
+				path(r.srcs[1]):escape(),
+				'-o',
+				path(r.dsts[1]):escape(),
+			}:concat' ')
 		end,
 	}
 end
+env.targets:add{
+	dsts = {resOut..'/shader.spv'},
+	srcs = {
+		'res/shader-vert.spv',
+		'res/shader-frag.spv',
+	},
+	rule = function(r)
+		env:exec(table{
+			'spirv-link',
+			table(r.srcs):mapi(function(f) return path(f):escape() end):concat' ',
+			'-o',
+			r.dsts[1],
+		}:concat' ')
+	end,
+}
+
 function postBuildDist()
-	env.targets:run(table.mapi(fns, function(fn)
-		return env:getResourcePath()..'/'..fn.dst
-	end):unpack())
+	env.targets:run(resOut..'/shader.spv')
 end

@@ -1397,8 +1397,7 @@ public:
 				.setBindings(bindings)
 		);
 
-		auto vertShaderModule = VulkanShaderModule::fromFile(device, "shader-vert.spv");
-		auto fragShaderModule = VulkanShaderModule::fromFile(device, "shader-frag.spv");
+		auto shaderModule = VulkanShaderModule::fromFile(device, "shader.spv");
 
 		auto bindingDescriptions = Common::make_array(
 			Vertex::getBindingDescription()
@@ -1472,12 +1471,12 @@ public:
 		auto shaderStages = Common::make_array(
 			vk::PipelineShaderStageCreateInfo()
 				.setStage(vk::ShaderStageFlagBits::eVertex)
-				.setModule(*vertShaderModule)
-				.setPName("main"),	//"vert"	//GLSL uses 'main', but clspv doesn't allow 'main', so ...
+				.setModule(*shaderModule)
+				.setPName("main"),
 			vk::PipelineShaderStageCreateInfo()
 				.setStage(vk::ShaderStageFlagBits::eFragment)
-				.setModule(*fragShaderModule)
-				.setPName("main")	//"frag"
+				.setModule(*shaderModule)
+				.setPName("main")
 		);
 		auto obj = vk::raii::Pipeline(
 			device,
