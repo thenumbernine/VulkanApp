@@ -163,9 +163,7 @@ struct VulkanInstance {
 		// vkCreateInstance needs layerNames
 		std::vector<char const *> layerNames;
 		if (enableValidationLayers) {
-			//insert which of those into our layerName for creating something or something
-			//layerNames.push_back("VK_LAYER_LUNARG_standard_validation");	//nope
-			layerNames.push_back("VK_LAYER_KHRONOS_validation");	//nope
+			layerNames.push_back("VK_LAYER_KHRONOS_validation");
 		}
 
 		// vkCreateInstance needs extensions
@@ -188,11 +186,21 @@ protected:
 		::SDLApp::SDLApp const * const app,
 		bool const enableValidationLayers
 	) {
+#if 0	// SDL2
 		// TODO vulkanEnumSDL ?  or just test the return-type for the SDL return type? (assuming it's not the same as the Vulkan return type ...)
 		auto extensionCount = uint32_t{};
 		SDL_VULKAN_SAFE(SDL_Vulkan_GetInstanceExtensions, app->getWindow(), &extensionCount, nullptr);
 		std::vector<char const *> extensions(extensionCount);
 		SDL_VULKAN_SAFE(SDL_Vulkan_GetInstanceExtensions, app->getWindow(), &extensionCount, extensions.data());
+#endif
+#if 1	// SDL3
+		auto extensionCount = uint32_t{};
+		auto extensionPtrs = SDL_Vulkan_GetInstanceExtensions(&extensionCount);
+		std::vector<char const*> extensions;
+		for (auto *ext = extensionPtrs; ext < extensionPtrs + extensionCount; ++ext) {
+			extensions.push_back(*ext);
+		}
+#endif
 
 		//debugging:
 		std::cout << "vulkan extensions:" << std::endl;
@@ -1589,7 +1597,7 @@ public:
 };
 
 // so I don't have to prefix all my fields and names
-struct VulkanCommon {
+struct VulkanEnv {
 protected:
 	static constexpr std::string modelPath = "viking_room.obj";
 	static constexpr std::string texturePath = "viking_room.png";
@@ -1663,7 +1671,7 @@ protected:
 	}
 
 public:
-	VulkanCommon(
+	VulkanEnv(
 		::SDLApp::SDLApp const * const app_
 	) : app(app_),
 		instance([this](){
@@ -1706,7 +1714,12 @@ public:
 		),
 		surface([this](){
 			VkSurfaceKHR h = {};
+#if 0 // SDL2
 			SDL_VULKAN_SAFE(SDL_Vulkan_CreateSurface, app->getWindow(), *instance, &h);
+#endif
+#if 1 // SDL3
+			SDL_Vulkan_CreateSurface(app->getWindow(), *instance, nullptr, &h);
+#endif
 			return vk::raii::SurfaceKHR(instance, h);
 		}()),
 		physicalDevice(VulkanPhysicalDevice::create(
@@ -2340,11 +2353,11 @@ struct Test : public ::SDLApp::SDLApp {
 	using Super = ::SDLApp::SDLApp;
 
 protected:
-	std::unique_ptr<VulkanCommon> vkCommon;
+	std::unique_ptr<VulkanEnv> vkEnv;
 
 	virtual void initWindow() {
 		Super::initWindow();
-		vkCommon = std::make_unique<VulkanCommon>(this);
+		vkEnv = std::make_unique<VulkanEnv>(this);
 	}
 
 public:
@@ -2364,16 +2377,16 @@ protected:
 		Super::loop();
 		//why here instead of shutdown?
 
-		vkCommon->loopDone();
+		vkEnv->loopDone();
 	}
 
 	virtual void onUpdate() {
 		Super::onUpdate();
-		vkCommon->drawFrame();
+		vkEnv->drawFrame();
 	}
 
 	virtual void onResize() {
-		vkCommon->setFramebufferResized();
+		vkEnv->setFramebufferResized();
 	}
 };
 
